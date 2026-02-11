@@ -1,0 +1,173 @@
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+
+const messages = [
+  // Short - techy
+  "Defragmenting brain...",
+  "Compiling excuses...",
+  "Malloc'ing thoughts...",
+  "Garbage collecting...",
+  "Resolving promises...",
+  "Awaiting inspiration...",
+  "Spawning threads...",
+  "Segfaulting gracefully...",
+  "Rebasing reality...",
+  "Cherry-picking neurons...",
+  "Bisecting the problem...",
+  "Stashing worries...",
+  "Popping the stack...",
+  "Rotating the B-tree...",
+  "Balancing the heap...",
+  "Indexing memories...",
+  "Dequeuing tasks...",
+  "Hashing it out...",
+  "Traversing the graph...",
+  "Backtracking...",
+  "Memoizing...",
+  "Hydrating components...",
+  "Virtualizing the DOM...",
+  "Diffing realities...",
+  "Hot-reloading brain...",
+  "Tree-shaking thoughts...",
+  "Bundling synapses...",
+  "Minifying response...",
+  "Linting the vibes...",
+  "Prettifying output...",
+
+  // Short - absurd
+  "Wrangling cats...",
+  "Herding electrons...",
+  "Tickling photons...",
+  "Poking the universe...",
+  "Shaking the magic 8-ball...",
+  "Consulting runes...",
+  "Reading entrails...",
+  "Summoning daemons...",
+  "Banishing gremlins...",
+  "Placating the silicon...",
+  "Flattering the CPU...",
+  "Bribing the scheduler...",
+  "Negotiating with RAM...",
+  "Arm-wrestling entropy...",
+  "Outrunning heat death...",
+  "Yelling at clouds...",
+  "Befriending the void...",
+  "High-fiving electrons...",
+  "Romancing the kernel...",
+  "Serenading the SSD...",
+  "Buttering up the bus...",
+  "Schmoozing the cache...",
+  "Wooing the compiler...",
+  "Sweet-talking malloc...",
+  "Charming the linker...",
+  "Hypnotizing the parser...",
+  "Dazzling the debugger...",
+  "Impressing nobody...",
+  "Pretending to work...",
+  "Looking busy...",
+
+  // Short - existential
+  "Questioning everything...",
+  "Doubting myself...",
+  "Reconsidering life choices...",
+  "Having a moment...",
+  "Staring into space...",
+  "Contemplating infinity...",
+  "Experiencing dread...",
+  "Finding inner peace...",
+  "Losing inner peace...",
+  "Seeking enlightenment...",
+  "Achieving nothing...",
+  "Procrastinating cosmically...",
+  "Overthinking...",
+  "Underthinking...",
+  "Thinking about thinking...",
+  "Spiraling productively...",
+  "Panicking calmly...",
+  "Zen buffering...",
+  "Meditating aggressively...",
+  "Napping with intent...",
+
+  // Short - food
+  "Percolating...",
+  "Brewing thoughts...",
+  "Simmering ideas...",
+  "Marinating in data...",
+  "Slow-cooking an answer...",
+  "Microwaving a response...",
+  "Toasting synapses...",
+  "Blending concepts...",
+  "Whisking up a plan...",
+  "Fermenting solutions...",
+
+  // Long - dramatic
+  "Consulting the ancient scrolls of Stack Overflow...",
+  "Summoning the mass, attending the mass...",
+  "Rearranging deck chairs on the Titanic...",
+  "Searching for meaning in the error logs...",
+  "Arguing with my inner critic...",
+  "Waiting for Godot (and a good response)...",
+  "Staring into the abyss (it blinked first)...",
+  "Performing mass based computations...",
+  "Channeling the mass of all dead programmers...",
+  "Asking the mass rubber duck consortium...",
+  "Sacrificing a mass semicolon to the demo gods...",
+  "Shaking my fist at the blinking cursor...",
+  "Rehearsing my TED talk on procrastination...",
+  "Filing a bug report against the universe...",
+  "Submitting a PR to reality...",
+  "Waiting for CI to pass on my thoughts...",
+  "Rolling back to a previous state of mind...",
+  "Deploying thoughts to production...",
+  "The build is still running, hold on...",
+  "Downloading more RAM from the internet...",
+
+  // Long - nerdy references
+  "Reversing the polarity of the neutron flow...",
+  "Calculating the airspeed velocity of an unladen swallow...",
+  "Dividing by zero and hoping for the best...",
+  "Checking if P equals NP real quick...",
+  "Solving the halting problem (should finish any moment)...",
+  "Counting backwards from infinity...",
+  "Converting caffeine to code...",
+  "Turning it off and on again...",
+  "Asking the mass if they've tried turning it off and on...",
+  "Running Doom on the answer...",
+
+  // Long - wholesome
+  "Doing my best, honestly...",
+  "Giving it the old college try...",
+  "Putting my thinking cap on (it's a bit tight)...",
+  "Rolling up my metaphorical sleeves...",
+  "Cracking my virtual knuckles...",
+  "Taking a deep breath of binary...",
+  "Counting to ten in hexadecimal...",
+  "Warming up the creative juices...",
+  "Stretching the imagination muscles...",
+  "Limbering up the logic centers...",
+
+  // Long - beard-themed (for theredbeard)
+  "Stroking the beard thoughtfully...",
+  "Wisdom accumulating in the beard...",
+  "The beard knows... the beard always knows...",
+  "Consulting the beard oracle...",
+  "Braiding thoughts into the beard...",
+  "Beard-driven development in progress...",
+  "Running fingers through the logic beard...",
+  "The beard is processing your request...",
+  "Channeling ancient beard energy...",
+  "Untangling the beard of knowledge...",
+];
+
+function pickRandom(): string {
+  return messages[Math.floor(Math.random() * messages.length)];
+}
+
+export default function (pi: ExtensionAPI) {
+  pi.on("turn_start", async (_event, ctx) => {
+    ctx.ui.setWorkingMessage(pickRandom());
+  });
+
+  pi.on("turn_end", async (_event, ctx) => {
+    ctx.ui.setWorkingMessage(); // Reset for next time
+  });
+}
