@@ -76,22 +76,25 @@ const simpleMarkdown = (text: string, width = 80): string => {
 	return markdown.render(width).join("\n");
 };
 
-const formatNotification = (text: string | null): { title: string; body: string } => {
+const formatNotification = (text: string | null, cwd?: string): { title: string; body: string } => {
+	const dir = cwd ? cwd.replace(/^\/home\/[^/]+/, "~") : "";
+	const titlePrefix = dir ? `π ${dir}` : "π";
+
 	const simplified = text ? simpleMarkdown(text) : "";
 	const normalized = simplified.replace(/\s+/g, " ").trim();
 	if (!normalized) {
-		return { title: "Ready for input", body: "" };
+		return { title: titlePrefix, body: "Ready for input" };
 	}
 
 	const maxBody = 200;
 	const body = normalized.length > maxBody ? `${normalized.slice(0, maxBody - 1)}…` : normalized;
-	return { title: "π", body };
+	return { title: titlePrefix, body };
 };
 
 export default function (pi: ExtensionAPI) {
-	pi.on("agent_end", async (event) => {
+	pi.on("agent_end", async (event, ctx) => {
 		const lastText = extractLastAssistantText(event.messages ?? []);
-		const { title, body } = formatNotification(lastText);
+		const { title, body } = formatNotification(lastText, ctx.cwd);
 		notify(title, body);
 	});
 }
