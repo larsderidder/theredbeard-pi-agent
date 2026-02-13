@@ -41,7 +41,7 @@ New `any` usage, unsafe assertions, missing annotations on public API surfaces, 
 Functions or components that are too large or do too many things. Missing extractions. Deeply nested logic. High parameter counts. Changes that make an existing god component worse.
 
 ### 6. Risk Assessment
-What could break in production? Backwards compatibility concerns. Migration safety. Performance implications. Security surface changes.
+For each risky area in the change, assess two things: likelihood of breakage (how likely is it that this causes a problem?) and blast radius (if it does break, how bad is it? One user, one feature, whole app down?). Flag backwards compatibility concerns, migration safety, performance implications, and security surface changes.
 
 ## Output
 
