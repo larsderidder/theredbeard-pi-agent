@@ -2,14 +2,12 @@
  * Files Extension
  *
  * /files command lists files in the current git tree (plus session-referenced files)
- * and offers quick actions like reveal, open, edit, or diff.
- * /diff is kept as an alias to the same picker.
+ * and offers quick actions like open, edit, or add to prompt.
  */
 
 import { spawnSync } from "node:child_process";
 import {
 	existsSync,
-	mkdtempSync,
 	readFileSync,
 	realpathSync,
 	statSync,
@@ -26,7 +24,6 @@ import {
 	fuzzyFilter,
 	getEditorKeybindings,
 	Input,
-	matchesKey,
 	type SelectItem,
 	SelectList,
 	Spacer,
@@ -278,11 +275,6 @@ const collectRecentFileReferences = (entries: SessionEntry[], cwd: string, limit
 	}
 
 	return results;
-};
-
-const findLatestFileReference = (entries: SessionEntry[], cwd: string): FileReference | null => {
-	const refs = collectRecentFileReferences(entries, cwd, 100);
-	return refs.find((ref) => ref.exists) ?? null;
 };
 
 const toCanonicalPath = (inputPath: string): { canonicalPath: string; isDirectory: boolean } | null => {
@@ -632,18 +624,15 @@ const getEditableContent = (target: FileEntry): EditCheckResult => {
 
 const showActionSelector = async (
 	ctx: ExtensionContext,
-	options: { canQuickLook: boolean; canEdit: boolean; canDiff: boolean },
-): Promise<"reveal" | "quicklook" | "open" | "edit" | "addToPrompt" | "diff" | null> => {
+	options: { canEdit: boolean },
+): Promise<"open" | "edit" | "addToPrompt" | null> => {
 	const actions: SelectItem[] = [
-		...(options.canDiff ? [{ value: "diff", label: "Diff in VS Code" }] : []),
-		{ value: "reveal", label: "Reveal in Finder" },
 		{ value: "open", label: "Open" },
 		{ value: "addToPrompt", label: "Add to prompt" },
-		...(options.canQuickLook ? [{ value: "quicklook", label: "Open in Quick Look" }] : []),
 		...(options.canEdit ? [{ value: "edit", label: "Edit" }] : []),
 	];
 
-	return ctx.ui.custom<"reveal" | "quicklook" | "open" | "edit" | "addToPrompt" | "diff" | null>((tui, theme, _kb, done) => {
+	return ctx.ui.custom<"open" | "edit" | "addToPrompt" | null>((tui, theme, _kb, done) => {
 		const container = new Container();
 		container.addChild(new DynamicBorder((str) => theme.fg("accent", str)));
 		container.addChild(new Text(theme.fg("accent", theme.bold("Choose action"))));
@@ -656,7 +645,7 @@ const showActionSelector = async (
 			noMatch: (text) => theme.fg("warning", text),
 		});
 
-		selectList.onSelect = (item) => done(item.value as "reveal" | "quicklook" | "open" | "edit" | "addToPrompt" | "diff");
+		selectList.onSelect = (item) => done(item.value as "open" | "edit" | "addToPrompt");
 		selectList.onCancel = () => done(null);
 
 		container.addChild(selectList);
@@ -747,90 +736,6 @@ const editPath = async (ctx: ExtensionContext, target: FileEntry, content: strin
 	}
 };
 
-const revealPath = async (pi: ExtensionAPI, ctx: ExtensionContext, target: FileEntry): Promise<void> => {
-	if (!existsSync(target.resolvedPath)) {
-		ctx.ui.notify(`File not found: ${target.displayPath}`, "error");
-		return;
-	}
-
-	const isDirectory = target.isDirectory || statSync(target.resolvedPath).isDirectory();
-	let command = "open";
-	let args: string[] = [];
-
-	if (process.platform === "darwin") {
-		args = isDirectory ? [target.resolvedPath] : ["-R", target.resolvedPath];
-	} else {
-		command = "xdg-open";
-		args = [isDirectory ? target.resolvedPath : path.dirname(target.resolvedPath)];
-	}
-
-	const result = await pi.exec(command, args);
-	if (result.code !== 0) {
-		const errorMessage = result.stderr?.trim() || `Failed to reveal ${target.displayPath}`;
-		ctx.ui.notify(errorMessage, "error");
-	}
-};
-
-const quickLookPath = async (pi: ExtensionAPI, ctx: ExtensionContext, target: FileEntry): Promise<void> => {
-	if (process.platform !== "darwin") {
-		ctx.ui.notify("Quick Look is only available on macOS", "warning");
-		return;
-	}
-
-	if (!existsSync(target.resolvedPath)) {
-		ctx.ui.notify(`File not found: ${target.displayPath}`, "error");
-		return;
-	}
-
-	const isDirectory = target.isDirectory || statSync(target.resolvedPath).isDirectory();
-	if (isDirectory) {
-		ctx.ui.notify("Quick Look only works on files", "warning");
-		return;
-	}
-
-	const result = await pi.exec("qlmanage", ["-p", target.resolvedPath]);
-	if (result.code !== 0) {
-		const errorMessage = result.stderr?.trim() || `Failed to Quick Look ${target.displayPath}`;
-		ctx.ui.notify(errorMessage, "error");
-	}
-};
-
-const openDiff = async (pi: ExtensionAPI, ctx: ExtensionContext, target: FileEntry, gitRoot: string | null): Promise<void> => {
-	if (!gitRoot) {
-		ctx.ui.notify("Git repository not found", "warning");
-		return;
-	}
-
-	const relativePath = path.relative(gitRoot, target.resolvedPath).split(path.sep).join("/");
-	const tmpDir = mkdtempSync(path.join(os.tmpdir(), "pi-files-"));
-	const tmpFile = path.join(tmpDir, path.basename(target.displayPath));
-
-	const existsInHead = await pi.exec("git", ["cat-file", "-e", `HEAD:${relativePath}`], { cwd: gitRoot });
-	if (existsInHead.code === 0) {
-		const result = await pi.exec("git", ["show", `HEAD:${relativePath}`], { cwd: gitRoot });
-		if (result.code !== 0) {
-			const errorMessage = result.stderr?.trim() || `Failed to diff ${target.displayPath}`;
-			ctx.ui.notify(errorMessage, "error");
-			return;
-		}
-		writeFileSync(tmpFile, result.stdout ?? "", "utf8");
-	} else {
-		writeFileSync(tmpFile, "", "utf8");
-	}
-
-	let workingPath = target.resolvedPath;
-	if (!existsSync(target.resolvedPath)) {
-		workingPath = path.join(tmpDir, `pi-files-working-${path.basename(target.displayPath)}`);
-		writeFileSync(workingPath, "", "utf8");
-	}
-
-	const openResult = await pi.exec("code", ["--diff", tmpFile, workingPath], { cwd: gitRoot });
-	if (openResult.code !== 0) {
-		const errorMessage = openResult.stderr?.trim() || `Failed to open diff for ${target.displayPath}`;
-		ctx.ui.notify(errorMessage, "error");
-	}
-};
-
 const addFileToPrompt = (ctx: ExtensionContext, target: FileEntry): void => {
 	const mentionTarget = target.displayPath || target.resolvedPath;
 	const mention = `@${mentionTarget}`;
@@ -844,8 +749,7 @@ const showFileSelector = async (
 	ctx: ExtensionContext,
 	files: FileEntry[],
 	selectedPath?: string | null,
-	gitRoot?: string | null,
-): Promise<{ selected: FileEntry | null; quickAction: "diff" | null }> => {
+): Promise<FileEntry | null> => {
 	const items: SelectItem[] = files.map((file) => {
 		const directoryLabel = file.isDirectory ? " [directory]" : "";
 		return {
@@ -855,7 +759,6 @@ const showFileSelector = async (
 		};
 	});
 
-	let quickAction: "diff" | null = null;
 	const selection = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
 		const container = new Container();
 		container.addChild(new DynamicBorder((str) => theme.fg("accent", str)));
@@ -868,7 +771,7 @@ const showFileSelector = async (
 		const listContainer = new Container();
 		container.addChild(listContainer);
 		container.addChild(
-			new Text(theme.fg("dim", "Type to filter • enter to select • ctrl+shift+d diff • esc to cancel"), 0, 0),
+			new Text(theme.fg("dim", "Type to filter • enter to select • esc to cancel"), 0, 0),
 		);
 		container.addChild(new DynamicBorder((str) => theme.fg("accent", str)));
 
@@ -922,21 +825,6 @@ const showFileSelector = async (
 				container.invalidate();
 			},
 			handleInput(data: string) {
-				if (matchesKey(data, "ctrl+shift+d")) {
-					const selected = selectList?.getSelectedItem();
-					if (selected) {
-						const file = files.find((entry) => entry.canonicalPath === selected.value);
-						const canDiff = file?.isTracked && !file.isDirectory && Boolean(gitRoot);
-						if (!canDiff) {
-							ctx.ui.notify("Diff is only available for tracked files", "warning");
-							return;
-						}
-						quickAction = "diff";
-						done(selected.value as string);
-						return;
-					}
-				}
-
 				const kb = getEditorKeybindings();
 				if (
 					kb.matches(data, "selectUp") ||
@@ -960,8 +848,7 @@ const showFileSelector = async (
 		};
 	});
 
-	const selected = selection ? files.find((file) => file.canonicalPath === selection) ?? null : null;
-	return { selected, quickAction };
+	return selection ? files.find((file) => file.canonicalPath === selection) ?? null : null;
 };
 
 const runFileBrowser = async (pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> => {
@@ -970,7 +857,7 @@ const runFileBrowser = async (pi: ExtensionAPI, ctx: ExtensionContext): Promise<
 		return;
 	}
 
-	const { files, gitRoot } = await buildFileEntries(pi, ctx);
+	const { files } = await buildFileEntries(pi, ctx);
 	if (files.length === 0) {
 		ctx.ui.notify("No files found", "info");
 		return;
@@ -978,7 +865,7 @@ const runFileBrowser = async (pi: ExtensionAPI, ctx: ExtensionContext): Promise<
 
 	let lastSelectedPath: string | null = null;
 	while (true) {
-		const { selected, quickAction } = await showFileSelector(ctx, files, lastSelectedPath, gitRoot);
+		const selected = await showFileSelector(ctx, files, lastSelectedPath);
 		if (!selected) {
 			ctx.ui.notify("Files cancelled", "info");
 			return;
@@ -986,28 +873,16 @@ const runFileBrowser = async (pi: ExtensionAPI, ctx: ExtensionContext): Promise<
 
 		lastSelectedPath = selected.canonicalPath;
 
-		const canQuickLook = process.platform === "darwin" && !selected.isDirectory;
 		const editCheck = getEditableContent(selected);
-		const canDiff = selected.isTracked && !selected.isDirectory && Boolean(gitRoot);
-
-		if (quickAction === "diff") {
-			await openDiff(pi, ctx, selected, gitRoot);
-			continue;
-		}
 
 		const action = await showActionSelector(ctx, {
-			canQuickLook,
 			canEdit: editCheck.allowed,
-			canDiff,
 		});
 		if (!action) {
 			continue;
 		}
 
 		switch (action) {
-			case "quicklook":
-				await quickLookPath(pi, ctx, selected);
-				break;
 			case "open":
 				await openPath(pi, ctx, selected);
 				break;
@@ -1020,12 +895,6 @@ const runFileBrowser = async (pi: ExtensionAPI, ctx: ExtensionContext): Promise<
 				break;
 			case "addToPrompt":
 				addFileToPrompt(ctx, selected);
-				break;
-			case "diff":
-				await openDiff(pi, ctx, selected, gitRoot);
-				break;
-			default:
-				await revealPath(pi, ctx, selected);
 				break;
 		}
 	}
@@ -1043,72 +912,6 @@ export default function (pi: ExtensionAPI): void {
 		description: "Browse files mentioned in the session",
 		handler: async (ctx) => {
 			await runFileBrowser(pi, ctx);
-		},
-	});
-
-	pi.registerShortcut("ctrl+shift+f", {
-		description: "Reveal the latest file reference in Finder",
-		handler: async (ctx) => {
-			const entries = ctx.sessionManager.getBranch();
-			const latest = findLatestFileReference(entries, ctx.cwd);
-
-			if (!latest) {
-				ctx.ui.notify("No file reference found in the session", "warning");
-				return;
-			}
-
-			const canonical = toCanonicalPath(latest.path);
-			if (!canonical) {
-				ctx.ui.notify(`File not found: ${latest.display}`, "error");
-				return;
-			}
-
-			await revealPath(pi, ctx, {
-				canonicalPath: canonical.canonicalPath,
-				resolvedPath: canonical.canonicalPath,
-				displayPath: latest.display,
-				exists: true,
-				isDirectory: canonical.isDirectory,
-				status: undefined,
-				inRepo: false,
-				isTracked: false,
-				isReferenced: true,
-				hasSessionChange: false,
-				lastTimestamp: 0,
-			});
-		},
-	});
-
-	pi.registerShortcut("ctrl+shift+r", {
-		description: "Quick Look the latest file reference",
-		handler: async (ctx) => {
-			const entries = ctx.sessionManager.getBranch();
-			const latest = findLatestFileReference(entries, ctx.cwd);
-
-			if (!latest) {
-				ctx.ui.notify("No file reference found in the session", "warning");
-				return;
-			}
-
-			const canonical = toCanonicalPath(latest.path);
-			if (!canonical) {
-				ctx.ui.notify(`File not found: ${latest.display}`, "error");
-				return;
-			}
-
-			await quickLookPath(pi, ctx, {
-				canonicalPath: canonical.canonicalPath,
-				resolvedPath: canonical.canonicalPath,
-				displayPath: latest.display,
-				exists: true,
-				isDirectory: canonical.isDirectory,
-				status: undefined,
-				inRepo: false,
-				isTracked: false,
-				isReferenced: true,
-				hasSessionChange: false,
-				lastTimestamp: 0,
-			});
 		},
 	});
 }
