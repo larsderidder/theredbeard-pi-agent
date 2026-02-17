@@ -10,12 +10,39 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { execSync, spawn } from "child_process";
-import { existsSync, readFileSync, unlinkSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
+import sharp from "sharp";
+
+const MAX_DIMENSION = 2000;
 
 const GODOT_BIN =
-	"/home/lars/Downloads/Godot_v4.5.1-stable_linux.x86_64/Godot_v4.5.1-stable_linux.x86_64";
-const PROJECT_DIR = "/home/lars/workspace/luvlies/godot";
+	"/home/lars/.local/bin/godot";
+const PROJECT_DIR = process.env.GODOT_PROJECT_DIR || process.cwd() + "/godot";
+
+/** Kill any lingering Godot processes from previous screenshot runs. */
+function killStaleGodot(): void {
+	try {
+		execSync(`pkill -f "${GODOT_BIN}.*--path.*${PROJECT_DIR}" 2>/dev/null || true`, {
+			timeout: 3000,
+			encoding: "utf-8",
+		});
+	} catch {
+		// best effort
+	}
+}
+
+/** Restore project.godot and clean up the autoload script. Always safe to call. */
+function cleanupScreenshotArtifacts(
+	projectFile: string,
+	originalProject: string,
+	autoloadScript: string,
+	screenshotPath: string,
+): void {
+	try { writeFileSync(projectFile, originalProject); } catch { /* best effort */ }
+	try { if (existsSync(autoloadScript)) unlinkSync(autoloadScript); } catch { /* best effort */ }
+	try { if (existsSync(screenshotPath)) unlinkSync(screenshotPath); } catch { /* best effort */ }
+}
 
 export default function (pi: ExtensionAPI) {
 	// Tool: Capture a screenshot of the running game
@@ -47,14 +74,43 @@ export default function (pi: ExtensionAPI) {
 			const width = params.width ?? 1280;
 			const height = params.height ?? 800;
 			const screenshotPath = join(PROJECT_DIR, "screenshot_auto.png");
+			const projectFile = join(PROJECT_DIR, "project.godot");
+			const scriptsDir = join(PROJECT_DIR, "scripts");
+			const autoloadScript = join(scriptsDir, "_auto_screenshot.gd");
+
+			// Validate project exists
+			if (!existsSync(projectFile)) {
+				return {
+					content: [{ type: "text", text: `project.godot not found at ${projectFile}. Is GODOT_PROJECT_DIR set correctly?` }],
+					isError: true,
+				};
+			}
+
+			// Validate Godot binary exists
+			if (!existsSync(GODOT_BIN)) {
+				return {
+					content: [{ type: "text", text: `Godot binary not found at ${GODOT_BIN}.` }],
+					isError: true,
+				};
+			}
+
+			// Kill any stale Godot from a previous failed run
+			killStaleGodot();
 
 			// Clean up previous screenshot
 			if (existsSync(screenshotPath)) {
 				unlinkSync(screenshotPath);
 			}
 
+			// Ensure scripts directory exists
+			if (!existsSync(scriptsDir)) {
+				mkdirSync(scriptsDir, { recursive: true });
+			}
+
+			// Read original project before any modifications
+			const originalProject = readFileSync(projectFile, "utf-8");
+
 			// Write a temporary autoload script that captures after N frames
-			const autoloadScript = join(PROJECT_DIR, "scripts", "_auto_screenshot.gd");
 			const waitFrames = Math.max(5, Math.ceil((waitMs / 1000) * 60)); // assume ~60fps
 			const gdScript = `extends Node
 
@@ -68,12 +124,9 @@ func _process(_delta: float) -> void:
 		print("SCREENSHOT_CAPTURED")
 		get_tree().quit()
 `;
-			require("fs").writeFileSync(autoloadScript, gdScript);
+			writeFileSync(autoloadScript, gdScript);
 
-			// We need to temporarily add the autoload to project.godot
-			const projectFile = join(PROJECT_DIR, "project.godot");
-			const originalProject = readFileSync(projectFile, "utf-8");
-
+			// Add autoload to project.godot
 			let modifiedProject = originalProject;
 			if (modifiedProject.includes("[autoload]")) {
 				modifiedProject = modifiedProject.replace(
@@ -83,16 +136,18 @@ func _process(_delta: float) -> void:
 			} else {
 				modifiedProject += '\n[autoload]\n_AutoScreenshot="*res://scripts/_auto_screenshot.gd"\n';
 			}
-			require("fs").writeFileSync(projectFile, modifiedProject);
+			writeFileSync(projectFile, modifiedProject);
 
 			onUpdate?.({
 				content: [{ type: "text", text: `Launching Godot (waiting ${waitMs}ms / ${waitFrames} frames)...` }],
 			});
 
+			let godotOutput = "";
+
 			try {
-				// Run Godot with a timeout
-				const timeout = Math.max(waitMs + 5000, 15000);
-				execSync(
+				// Run Godot with a timeout (generous: waitMs + 10s, minimum 15s)
+				const timeout = Math.max(waitMs + 10000, 15000);
+				godotOutput = execSync(
 					`${GODOT_BIN} --path "${PROJECT_DIR}" --resolution ${width}x${height} 2>&1`,
 					{
 						timeout,
@@ -101,42 +156,82 @@ func _process(_delta: float) -> void:
 					}
 				);
 			} catch (err: any) {
-				// Godot may exit with non-zero after quit(), that's fine
+				// Godot exits with non-zero after quit(), that's expected.
+				// Capture whatever output we got for diagnostics.
+				godotOutput = err.stdout || err.stderr || err.message || "";
+
 				if (!existsSync(screenshotPath)) {
-					// Restore project.godot
-					require("fs").writeFileSync(projectFile, originalProject);
-					// Clean up autoload script
-					if (existsSync(autoloadScript)) unlinkSync(autoloadScript);
+					cleanupScreenshotArtifacts(projectFile, originalProject, autoloadScript, screenshotPath);
+
+					// Try to extract useful error info
+					const errorLines = godotOutput
+						.split("\n")
+						.filter((l: string) => /error|fatal|exception|cannot|failed/i.test(l))
+						.slice(0, 10)
+						.join("\n");
 
 					return {
 						content: [
 							{
 								type: "text",
-								text: `Failed to capture screenshot. Godot output:\n${err.stdout || err.message}`,
+								text: `Failed to capture screenshot.\n${errorLines ? "Errors:\n" + errorLines : "Godot output:\n" + godotOutput.slice(0, 2000)}`,
 							},
 						],
+						isError: true,
 					};
 				}
 			} finally {
-				// Restore original project.godot (remove autoload)
-				require("fs").writeFileSync(projectFile, originalProject);
-				// Clean up autoload script
-				if (existsSync(autoloadScript)) unlinkSync(autoloadScript);
+				// Always restore original project.godot and clean up autoload script
+				writeFileSync(projectFile, originalProject);
+				try { if (existsSync(autoloadScript)) unlinkSync(autoloadScript); } catch { /* best effort */ }
 			}
 
 			if (!existsSync(screenshotPath)) {
 				return {
-					content: [{ type: "text", text: "Screenshot file was not created. Godot may have failed to launch." }],
+					content: [{ type: "text", text: "Screenshot file was not created. Godot may have crashed or the main scene failed to load." }],
+					isError: true,
 				};
 			}
 
-			// Read the screenshot and return as image
-			const imageData = readFileSync(screenshotPath);
-			const base64 = imageData.toString("base64");
+			// Read the screenshot, resize if needed for API limits
+			let imgBuffer: Buffer = readFileSync(screenshotPath);
+
+			// Clean up the screenshot file now that we have it in memory
+			try { unlinkSync(screenshotPath); } catch { /* best effort */ }
+
+			let imgW: number;
+			let imgH: number;
+			let needsResize: boolean;
+
+			try {
+				const metadata = await sharp(imgBuffer).metadata();
+				imgW = metadata.width ?? 0;
+				imgH = metadata.height ?? 0;
+				needsResize = imgW > MAX_DIMENSION || imgH > MAX_DIMENSION;
+			} catch {
+				imgW = 0;
+				imgH = 0;
+				needsResize = true;
+			}
+
+			let finalW = imgW;
+			let finalH = imgH;
+
+			if (needsResize) {
+				imgBuffer = await sharp(imgBuffer)
+					.resize(MAX_DIMENSION, MAX_DIMENSION, { fit: "inside", withoutEnlargement: true })
+					.png()
+					.toBuffer();
+				const resizedMeta = await sharp(imgBuffer).metadata();
+				finalW = resizedMeta.width ?? MAX_DIMENSION;
+				finalH = resizedMeta.height ?? MAX_DIMENSION;
+			}
+
+			const base64 = imgBuffer.toString("base64");
 
 			return {
 				content: [
-					{ type: "text", text: `Screenshot captured (${width}x${height}, after ${waitFrames} frames)` },
+					{ type: "text", text: `Screenshot captured (${imgW}x${imgH}${imgW !== finalW ? ` resized to ${finalW}x${finalH} for API` : ""}, after ${waitFrames} frames)` },
 					{ type: "image", data: base64, mimeType: "image/png" },
 				],
 			};
@@ -255,17 +350,30 @@ func _process(_delta: float) -> void:
 
 			// Clean up previous video
 			if (existsSync(outputVideo)) {
-				unlinkSync(outputVideo);
+				try { unlinkSync(outputVideo); } catch { /* best effort */ }
 			}
+
+			// Kill stale Godot from previous runs
+			killStaleGodot();
+
+			// Read project name for xdotool window search
+			const projectFile = join(PROJECT_DIR, "project.godot");
+			let windowName = "Godot";
+			try {
+				const projContent = readFileSync(projectFile, "utf-8");
+				const nameMatch = projContent.match(/config\/name="([^"]+)"/);
+				if (nameMatch) windowName = nameMatch[1];
+			} catch { /* use default */ }
 
 			onUpdate?.({
 				content: [{ type: "text", text: `Recording ${duration}s at ${fps}fps...` }],
 			});
 
+			let godotProcess: ReturnType<typeof spawn> | null = null;
+
 			try {
-				// Use ffmpeg to record the X11 window
-				// First start Godot in background
-				const godotProcess = spawn(
+				// Start Godot in background
+				godotProcess = spawn(
 					GODOT_BIN,
 					["--path", PROJECT_DIR, "--resolution", "1280x800"],
 					{
@@ -275,40 +383,51 @@ func _process(_delta: float) -> void:
 					}
 				);
 
-				// Wait for window to appear and get its position
-				await new Promise((resolve) => setTimeout(resolve, 2000));
-				
-				// Get window geometry using xdotool
-				let windowInfo = "";
-				try {
-					windowInfo = execSync(`xdotool search --name "Luvlies" getwindowgeometry | grep Position`, {
-						encoding: "utf-8",
-					});
-				} catch (e) {
-					// Fallback if can't find window
-					windowInfo = "Position: 0,0";
+				// Wait for window to appear, polling with xdotool
+				let windowId = "";
+				const maxRetries = 20;
+				for (let i = 0; i < maxRetries; i++) {
+					await new Promise((resolve) => setTimeout(resolve, 500));
+					try {
+						windowId = execSync(
+							`xdotool search --name "${windowName}" 2>/dev/null | head -1`,
+							{ encoding: "utf-8", timeout: 3000 }
+						).trim();
+						if (windowId) break;
+					} catch { /* keep trying */ }
 				}
-				
-				// Parse position like "Position: 123,456 (screen: 0)"
-				const match = windowInfo.match(/Position: (\d+),(\d+)/);
-				const xOffset = match ? match[1] : "0";
-				const yOffset = match ? match[2] : "0";
+
+				if (!windowId) {
+					throw new Error(`Godot window "${windowName}" did not appear after ${maxRetries * 500}ms`);
+				}
+
+				// Get window geometry
+				let xOffset = "0";
+				let yOffset = "0";
+				try {
+					const geom = execSync(`xdotool getwindowgeometry ${windowId}`, {
+						encoding: "utf-8",
+						timeout: 3000,
+					});
+					const match = geom.match(/Position: (\d+),(\d+)/);
+					if (match) {
+						xOffset = match[1];
+						yOffset = match[2];
+					}
+				} catch { /* fallback to 0,0 */ }
 
 				// Record with ffmpeg at the window position
 				execSync(
 					`ffmpeg -video_size 1280x800 -framerate ${fps} -f x11grab -i :0.0+${xOffset},${yOffset} -t ${duration} -pix_fmt yuv420p -y "${outputVideo}" 2>&1`,
 					{
-						timeout: (duration + 5) * 1000,
+						timeout: (duration + 10) * 1000,
 						encoding: "utf-8",
 					}
 				);
 
-				// Kill Godot
-				godotProcess.kill();
-
 				if (!existsSync(outputVideo)) {
 					return {
-						content: [{ type: "text", text: "Video recording failed - file not created" }],
+						content: [{ type: "text", text: "Video recording failed: output file was not created." }],
 						isError: true,
 					};
 				}
@@ -327,6 +446,11 @@ func _process(_delta: float) -> void:
 					content: [{ type: "text", text: `Recording failed:\n${err.stdout || err.stderr || err.message}` }],
 					isError: true,
 				};
+			} finally {
+				// Always kill Godot, even if ffmpeg fails
+				if (godotProcess && !godotProcess.killed) {
+					godotProcess.kill();
+				}
 			}
 		},
 	});

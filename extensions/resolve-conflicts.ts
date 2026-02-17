@@ -90,7 +90,11 @@ export default function (pi: ExtensionAPI) {
 				(tui, theme, _kb, done) => {
 					let selected: Choice = hasSuggestion ? "suggestion" : "ours";
 					let editMode = false;
-					let cachedLines: string[] | undefined;
+					let scrollOffset = 0;
+					let cachedAllLines: string[] | undefined;
+					let cachedFooterLines: string[] | undefined;
+					let cachedContentLines: string[] | undefined;
+					let lastWidth: number | undefined;
 
 					const choices: { key: Choice; label: string; shortcut: string }[] = [
 						...(hasSuggestion
@@ -125,8 +129,16 @@ export default function (pi: ExtensionAPI) {
 					};
 
 					function refresh() {
-						cachedLines = undefined;
+						cachedAllLines = undefined;
+						cachedFooterLines = undefined;
+						cachedContentLines = undefined;
+						lastWidth = undefined;
 						tui.requestRender();
+					}
+
+					function clampScroll(contentLineCount: number, viewportHeight: number) {
+						const maxScroll = Math.max(0, contentLineCount - viewportHeight);
+						scrollOffset = Math.max(0, Math.min(scrollOffset, maxScroll));
 					}
 
 					function handleInput(data: string) {
@@ -162,7 +174,35 @@ export default function (pi: ExtensionAPI) {
 							return;
 						}
 
-						// Arrow navigation
+						// Scroll with shift+up/down or page up/down
+						if (matchesKey(data, Key.shift("up")) || matchesKey(data, Key.pageUp)) {
+							if (scrollOffset > 0) {
+								scrollOffset = Math.max(0, scrollOffset - 5);
+								refresh();
+							}
+							return;
+						}
+						if (matchesKey(data, Key.shift("down")) || matchesKey(data, Key.pageDown)) {
+							scrollOffset += 5;
+							refresh();
+							return;
+						}
+
+						// Home/End for scroll
+						if (matchesKey(data, Key.home)) {
+							if (scrollOffset !== 0) {
+								scrollOffset = 0;
+								refresh();
+							}
+							return;
+						}
+						if (matchesKey(data, Key.end)) {
+							scrollOffset = Number.MAX_SAFE_INTEGER;
+							refresh();
+							return;
+						}
+
+						// Arrow navigation for choices
 						if (matchesKey(data, Key.up)) {
 							const idx = choices.findIndex((c) => c.key === selected);
 							if (idx > 0) {
@@ -201,8 +241,8 @@ export default function (pi: ExtensionAPI) {
 						}
 					}
 
-					function render(width: number): string[] {
-						if (cachedLines) return cachedLines;
+					function buildContentLines(width: number): string[] {
+						if (cachedContentLines && lastWidth === width) return cachedContentLines;
 
 						const lines: string[] = [];
 						const add = (s: string) => lines.push(truncateToWidth(s, width));
@@ -232,6 +272,17 @@ export default function (pi: ExtensionAPI) {
 							lines.push(...renderCodeBlock(params.suggestion!, width, theme));
 						}
 
+						cachedContentLines = lines;
+						return lines;
+					}
+
+					function buildFooterLines(width: number): string[] {
+						if (cachedFooterLines && lastWidth === width) return cachedFooterLines;
+
+						const lines: string[] = [];
+						const add = (s: string) => lines.push(truncateToWidth(s, width));
+						const hr = () => add(theme.fg("accent", "─".repeat(width)));
+
 						lines.push("");
 						hr();
 						lines.push("");
@@ -241,7 +292,9 @@ export default function (pi: ExtensionAPI) {
 							const isSelected = c.key === selected;
 							const prefix = isSelected ? theme.fg("accent", "> ") : "  ";
 							const shortcut = theme.fg("accent", `[${c.shortcut}]`);
-							const label = isSelected ? theme.fg("accent", c.label) : theme.fg("text", c.label);
+							const label = isSelected
+								? theme.fg("accent", c.label)
+								: theme.fg("text", c.label);
 							add(`${prefix}${shortcut} ${label}`);
 						}
 
@@ -260,20 +313,70 @@ export default function (pi: ExtensionAPI) {
 							add(
 								theme.fg(
 									"dim",
-									` ↑↓ navigate • Enter select • ${hasSuggestion ? "a" : ""}o/t/c shortcut • Esc skip`,
+									` ↑↓ navigate • Shift+↑↓/PgUp/PgDn scroll • Enter select • ${hasSuggestion ? "a/" : ""}o/t/c shortcut • Esc skip`,
 								),
 							);
 						}
 						hr();
 
-						cachedLines = lines;
+						cachedFooterLines = lines;
 						return lines;
+					}
+
+					function render(width: number): string[] {
+						if (cachedAllLines && lastWidth === width) return cachedAllLines;
+
+						const contentLines = buildContentLines(width);
+						const footerLines = buildFooterLines(width);
+
+						const termHeight = tui.terminal.rows;
+						const availableForContent = termHeight - footerLines.length;
+
+						if (contentLines.length <= availableForContent) {
+							// Everything fits, no scrolling needed
+							scrollOffset = 0;
+							cachedAllLines = [...contentLines, ...footerLines];
+						} else {
+							// Reserve 1 row for the scroll indicator
+							const scrollViewport = availableForContent - 1;
+							// Need to scroll the content area
+							clampScroll(contentLines.length, scrollViewport);
+							const visibleContent = contentLines.slice(
+								scrollOffset,
+								scrollOffset + scrollViewport,
+							);
+
+							// Add scroll indicator
+							const atTop = scrollOffset === 0;
+							const atBottom =
+								scrollOffset + scrollViewport >= contentLines.length;
+							let scrollHint = "";
+							if (!atTop && !atBottom) {
+								scrollHint = ` [${scrollOffset + 1}-${scrollOffset + visibleContent.length} of ${contentLines.length}]`;
+							} else if (!atTop) {
+								scrollHint = ` [${scrollOffset + 1}-${contentLines.length} of ${contentLines.length}]`;
+							} else {
+								scrollHint = ` [1-${visibleContent.length} of ${contentLines.length}]`;
+							}
+							const indicator = truncateToWidth(
+								theme.fg("dim", `  ▲▼ scroll${scrollHint}`),
+								width,
+							);
+
+							cachedAllLines = [indicator, ...visibleContent, ...footerLines];
+						}
+
+						lastWidth = width;
+						return cachedAllLines;
 					}
 
 					return {
 						render,
 						invalidate: () => {
-							cachedLines = undefined;
+							cachedAllLines = undefined;
+							cachedFooterLines = undefined;
+							cachedContentLines = undefined;
+							lastWidth = undefined;
 						},
 						handleInput,
 					};

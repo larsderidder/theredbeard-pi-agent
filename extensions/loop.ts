@@ -13,7 +13,7 @@ import { compact } from "@mariozechner/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Text } from "@mariozechner/pi-tui";
 import { DynamicBorder } from "@mariozechner/pi-coding-agent";
 
-type LoopMode = "tests" | "custom" | "self";
+type LoopMode = "tests" | "todos" | "custom" | "self";
 
 type LoopStateData = {
 	active: boolean;
@@ -22,10 +22,13 @@ type LoopStateData = {
 	prompt?: string;
 	summary?: string;
 	loopCount?: number;
+	autoCommit?: boolean;
 };
 
 const LOOP_PRESETS = [
 	{ value: "tests", label: "Until tests pass", description: "" },
+	{ value: "todos", label: "Until all todos done", description: "" },
+	{ value: "todos-tagged", label: "Until todos with tag done", description: "" },
 	{ value: "custom", label: "Until custom condition", description: "" },
 	{ value: "self", label: "Self driven (agent decides)", description: "" },
 ] as const;
@@ -49,6 +52,17 @@ function buildPrompt(mode: LoopMode, condition?: string): string {
 				"Run all tests. If they are passing, call the signal_loop_success tool. " +
 				"Otherwise continue until the tests pass."
 			);
+		case "todos": {
+			const tag = condition?.trim();
+			const scope = tag ? `open todos tagged "${tag}"` : "open todos";
+			const filter = tag ? ` Focus only on todos that have the "${tag}" tag.` : "";
+			return (
+				`List ${scope} with the todo tool. Pick an unclaimed one, claim it, work on it, then close it.${filter} ` +
+				`After completing a todo, check if any ${scope} remain. ` +
+				`If none remain, call the signal_loop_success tool. ` +
+				`Otherwise, your work for this iteration is done and you should wait for the next loop iteration.`
+			);
+		}
 		case "custom": {
 			const customCondition = condition?.trim() || "the custom condition is satisfied";
 			return (
@@ -65,6 +79,10 @@ function summarizeCondition(mode: LoopMode, condition?: string): string {
 	switch (mode) {
 		case "tests":
 			return "tests pass";
+		case "todos": {
+			const tag = condition?.trim();
+			return tag ? `all "${tag}" todos done` : "all todos done";
+		}
 		case "custom": {
 			const summary = condition?.trim() || "custom condition";
 			return summary.length > 48 ? `${summary.slice(0, 45)}...` : summary;
@@ -78,6 +96,10 @@ function getConditionText(mode: LoopMode, condition?: string): string {
 	switch (mode) {
 		case "tests":
 			return "tests pass";
+		case "todos": {
+			const tag = condition?.trim();
+			return tag ? `all todos tagged "${tag}" are done` : "all todos are done";
+		}
 		case "custom":
 			return condition?.trim() || "custom condition";
 		case "self":
@@ -270,11 +292,31 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
 		if (!selection) return null;
 
+		// Ask about auto-commit for todo loops
+		let autoCommit = false;
+		if (selection === "todos" || selection === "todos-tagged") {
+			autoCommit = await ctx.ui.confirm("Auto-commit?", "Automatically commit after each completed todo?");
+		}
+
 		switch (selection) {
 			case "tests":
-				return { active: true, mode: "tests", prompt: buildPrompt("tests") };
+				return { active: true, mode: "tests", prompt: buildPrompt("tests"), autoCommit: false };
+			case "todos":
+				return { active: true, mode: "todos", prompt: buildPrompt("todos"), autoCommit };
+			case "todos-tagged": {
+				const tag = await ctx.ui.input("Tag to filter todos by:");
+				if (!tag?.trim()) return null;
+				const trimmedTag = tag.trim();
+				return {
+					active: true,
+					mode: "todos",
+					condition: trimmedTag,
+					prompt: buildPrompt("todos", trimmedTag),
+					autoCommit,
+				};
+			}
 			case "self":
-				return { active: true, mode: "self", prompt: buildPrompt("self") };
+				return { active: true, mode: "self", prompt: buildPrompt("self"), autoCommit: false };
 			case "custom": {
 				const condition = await ctx.ui.editor("Enter loop breakout condition:", "");
 				if (!condition?.trim()) return null;
@@ -283,6 +325,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
 					mode: "custom",
 					condition: condition.trim(),
 					prompt: buildPrompt("custom", condition.trim()),
+					autoCommit: false,
 				};
 			}
 			default:
@@ -295,19 +338,35 @@ export default function loopExtension(pi: ExtensionAPI): void {
 		const parts = args.trim().split(/\s+/);
 		const mode = parts[0]?.toLowerCase();
 
+		// Check for --no-commit flag
+		const hasNoCommit = parts.includes("--no-commit");
+		const filteredParts = parts.filter(p => p !== "--no-commit");
+		const autoCommit = !hasNoCommit;
+
 		switch (mode) {
 			case "tests":
-				return { active: true, mode: "tests", prompt: buildPrompt("tests") };
+				return { active: true, mode: "tests", prompt: buildPrompt("tests"), autoCommit: false };
+			case "todos": {
+				const tag = filteredParts.slice(1).join(" ").trim() || undefined;
+				return {
+					active: true,
+					mode: "todos",
+					condition: tag,
+					prompt: buildPrompt("todos", tag),
+					autoCommit,
+				};
+			}
 			case "self":
-				return { active: true, mode: "self", prompt: buildPrompt("self") };
+				return { active: true, mode: "self", prompt: buildPrompt("self"), autoCommit: false };
 			case "custom": {
-				const condition = parts.slice(1).join(" ").trim();
+				const condition = filteredParts.slice(1).join(" ").trim();
 				if (!condition) return null;
 				return {
 					active: true,
 					mode: "custom",
 					condition,
 					prompt: buildPrompt("custom", condition),
+					autoCommit: false,
 				};
 			}
 			default:
@@ -343,7 +402,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
 			let nextState = parseArgs(args);
 			if (!nextState) {
 				if (!ctx.hasUI) {
-					ctx.ui.notify("Usage: /loop tests | /loop custom <condition> | /loop self", "warning");
+					ctx.ui.notify("Usage: /loop tests | /loop todos [tag] | /loop custom <condition> | /loop self", "warning");
 					return;
 				}
 				nextState = await showLoopSelector(ctx);
@@ -442,5 +501,75 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_switch", async (_event: SessionSwitchEvent, ctx) => {
 		await restoreLoopState(ctx);
+	});
+
+	let justCommitted = false;
+
+	pi.on("tool_result", async (event, ctx) => {
+		if (!loopState.active) return;
+		// Skip if auto-commit is disabled
+		if (!loopState.autoCommit) return;
+		if (event.toolName !== "todo") return;
+		
+		// Check if this was a successful todo close operation
+		const input = event.input as { action?: string; id?: string; status?: string; title?: string };
+		
+		// Only commit when a todo is closed (status changed to "closed" or deleted)
+		const isClosed = (input.action === "update" && input.status === "closed") || 
+		                 (input.action === "delete");
+		
+		if (!isClosed) return;
+		
+		// Check if the todo tool indicated success
+		if (event.isError) return;
+		
+		// Extract todo information
+		const todoId = input.id;
+		const todoTitle = input.title;
+		if (!todoId) return;
+		
+		// Check for unstaged changes
+		const statusResult = await pi.exec("git", ["status", "--porcelain"], { cwd: ctx.cwd });
+		if (statusResult.code !== 0 || !statusResult.stdout.trim()) {
+			return; // No changes to commit
+		}
+		
+		// Build commit instruction message
+		let commitInstruction: string;
+		if (todoTitle) {
+			// Use the todo title as guidance for the commit message
+			commitInstruction = `/skill:commit ${todoTitle}`;
+		} else {
+			// Fallback to generic instruction
+			commitInstruction = `/skill:commit Complete todo ${todoId}`;
+		}
+		
+		// Queue the commit as a follow-up message
+		justCommitted = true;
+		pi.sendUserMessage(commitInstruction, { deliverAs: "followUp" });
+	});
+
+	pi.on("agent_end", async (event, ctx) => {
+		if (!loopState.active) return;
+
+		if (ctx.hasUI && wasLastAssistantAborted(event.messages)) {
+			const confirm = await ctx.ui.confirm(
+				"Break active loop?",
+				"Operation aborted. Break out of the loop?",
+			);
+			if (confirm) {
+				breakLoop(ctx);
+				return;
+			}
+		}
+
+		// If we just triggered a commit, skip one loop iteration
+		// to let the commit complete before continuing the loop
+		if (justCommitted) {
+			justCommitted = false;
+			return;
+		}
+
+		triggerLoopPrompt(ctx);
 	});
 }

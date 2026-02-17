@@ -1,0 +1,14 @@
+{
+  "name": "pi-screenshot",
+  "version": "1.0.0",
+  "description": "Screenshot tool for pi: captures webpages via Puppeteer",
+  "dependencies": {
+    "puppeteer": "^24.37.2",
+    "sharp": "^0.34.5"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
