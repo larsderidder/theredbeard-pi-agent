@@ -122,7 +122,6 @@ const messages = [
   "Downloading more RAM from the internet...",
 
   // Long - nerdy references
-  "Reversing the polarity of the neutron flow...",
   "Calculating the airspeed velocity of an unladen swallow...",
   "Dividing by zero and hoping for the best...",
   "Checking if P equals NP real quick...",
@@ -144,18 +143,6 @@ const messages = [
   "Warming up the creative juices...",
   "Stretching the imagination muscles...",
   "Limbering up the logic centers...",
-
-  // Long - beard-themed (for theredbeard)
-  "Stroking the beard thoughtfully...",
-  "Wisdom accumulating in the beard...",
-  "The beard knows... the beard always knows...",
-  "Consulting the beard oracle...",
-  "Braiding thoughts into the beard...",
-  "Beard-driven development in progress...",
-  "Running fingers through the logic beard...",
-  "The beard is processing your request...",
-  "Channeling ancient beard energy...",
-  "Untangling the beard of knowledge...",
 
   // Baldur's Gate / D&D
   "Rolling for initiative...",
@@ -228,12 +215,49 @@ const messages = [
   "Consulting the Omnissiah...",
   "For the glory of the Imperium!",
 
-  // The Witcher
-  "Tossing a coin to your debugger...",
-  "Brewing a Cat potion for focus...",
-  "Meditating to restore energy...",
-  "Following the Law of Surprise...",
-  "Hmm... winds howling...",
+  // FromSoftware
+  "You Died. Retrying...",
+  "Kindling the bonfire...",
+  "Praising the sun...",
+  "Retrieving lost souls...",
+  "Summoning a phantom...",
+  "Invading your thought process...",
+  "YOU DIED (but made progress)...",
+  "Analyzing boss attack patterns...",
+  "Estus flask depleted...",
+  "Git gud subroutine executing...",
+  "Traversing the fog gate...",
+  "Reading the message on the ground...",
+  "This path... try fingers... but hole...",
+  "Remembering Elden Ring lore...",
+  "Tarnished... your grace awaits...",
+  "Consulting Melina...",
+  "A Great Rune has been restored...",
+  "Mending the Elden Ring of code...",
+
+  // Planescape: Torment
+  "What can change the nature of a man?...",
+  "Consulting the Lady of Pain...",
+  "Remembering a past life...",
+  "Sigil is processing...",
+  "Dusting off a mortality...",
+  "The Nameless One ponders...",
+  "Morte has a comment...",
+  "Belief shapes reality, shaping output...",
+  "Faction philosophy loading...",
+  "Planes aligning...",
+
+  // Fallout
+  "War. War never changes...",
+  "Calculating SPECIAL stats...",
+  "Consulting the Pip-Boy...",
+  "Welcome to the Wasteland...",
+  "Checking karma...",
+  "It's dangerous outside the Vault...",
+  "Patching power armor...",
+  "Please stand by...",
+  "Locating nearest vault...",
+  "Grey. Everything is grey...",
 
   // Mass Effect
   "Calibrating the calibrations...",
@@ -248,13 +272,6 @@ const messages = [
   "Consulting the Guide...",
   "Generating infinite improbability...",
   "Thanks for all the fish...",
-
-  // Doctor Who
-  "Reversing the polarity of the neutron flow...",
-  "Wibbly wobbly, timey wimey processing...",
-  "Bigger on the inside than it appears...",
-  "Consulting the TARDIS databanks...",
-  "Allons-y!",
 
   // Discworld
   "Consulting the Librarian (ook)...",
