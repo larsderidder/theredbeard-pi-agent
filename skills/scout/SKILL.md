@@ -71,8 +71,6 @@ Use inline tags: `[certain]`, `[likely]`, `[uncertain]`, `[speculative]`.
 
 ## Output Format
 
-**Save location:** `/home/lars/clawd/content/research/YYYY-MM-DD-topic-name.md`
-
 Always use today's date (`YYYY-MM-DD`) as the filename prefix. Example: `2026-02-18-topic-name.md`
 
 Structure findings like this:
