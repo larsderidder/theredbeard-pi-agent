@@ -249,6 +249,7 @@ class TodoSelectorComponent extends Container implements Focusable {
 	private allTodos: TodoFrontMatter[];
 	private filteredTodos: TodoFrontMatter[];
 	private selectedIndex = 0;
+	private showClosed = false;
 	private onSelectCallback: (todo: TodoFrontMatter) => void;
 	private onCancelCallback: () => void;
 	private tui: TUI;
@@ -331,7 +332,8 @@ class TodoSelectorComponent extends Container implements Focusable {
 	private updateHeader(): void {
 		const openCount = this.allTodos.filter((todo) => !isTodoClosed(todo.status)).length;
 		const closedCount = this.allTodos.length - openCount;
-		const title = `Todos (${openCount} open, ${closedCount} closed)`;
+		const visibility = this.showClosed ? "showing closed" : "hiding closed";
+		const title = `Todos (${openCount} open, ${closedCount} closed - ${visibility})`;
 		this.headerText.setText(this.theme.fg("accent", this.theme.bold(title)));
 	}
 
@@ -339,13 +341,19 @@ class TodoSelectorComponent extends Container implements Focusable {
 		this.hintText.setText(
 			this.theme.fg(
 				"dim",
-				"Type to search • ↑↓ select • Enter actions • Ctrl+Shift+W work • Ctrl+Shift+R refine • Esc close",
+				"Type to search • ↑↓ select • Enter actions • Ctrl+Shift+W work • Ctrl+Shift+R refine • Ctrl+T toggle closed • Esc close",
 			),
 		);
 	}
 
 	private applyFilter(query: string): void {
-		this.filteredTodos = filterTodos(this.allTodos, query);
+		// Filter by search query
+		let todos = filterTodos(this.allTodos, query);
+		// Filter out closed todos if showClosed is false
+		if (!this.showClosed) {
+			todos = todos.filter((todo) => !isTodoClosed(todo.status));
+		}
+		this.filteredTodos = todos;
 		this.selectedIndex = Math.min(this.selectedIndex, Math.max(0, this.filteredTodos.length - 1));
 		this.updateList();
 	}
@@ -427,6 +435,12 @@ class TodoSelectorComponent extends Container implements Focusable {
 		if (matchesKey(keyData, Key.ctrlShift("w"))) {
 			const selected = this.filteredTodos[this.selectedIndex];
 			if (selected && this.onQuickAction) this.onQuickAction(selected, "work");
+			return;
+		}
+		if (matchesKey(keyData, Key.ctrl("t"))) {
+			this.showClosed = !this.showClosed;
+			this.updateHeader();
+			this.applyFilter(this.searchInput.getValue());
 			return;
 		}
 		this.searchInput.handleInput(keyData);
@@ -1441,7 +1455,9 @@ export default function todosExtension(pi: ExtensionAPI) {
 			switch (action) {
 				case "list": {
 					const todos = await listTodos(todosDir);
-					const { assignedTodos, openTodos } = splitTodosByAssignment(todos);
+					// Filter out closed/done todos for normal list view
+					const activeTodos = todos.filter((todo) => !isTodoClosed(todo.status));
+					const { assignedTodos, openTodos } = splitTodosByAssignment(activeTodos);
 					const listedTodos = [...assignedTodos, ...openTodos];
 					const currentSessionId = ctx.sessionManager.getSessionId();
 					return {
