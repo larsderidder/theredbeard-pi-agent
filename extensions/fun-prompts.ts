@@ -156,6 +156,112 @@ const messages = [
   "The beard is processing your request...",
   "Channeling ancient beard energy...",
   "Untangling the beard of knowledge...",
+
+  // Baldur's Gate / D&D
+  "Rolling for initiative...",
+  "Making a perception check...",
+  "Casting Detect Thoughts...",
+  "Preparing a long rest...",
+  "Multiclassing into Wizard...",
+  "Adding proficiency bonus...",
+  "Failing a wisdom saving throw...",
+  "Rolling a natural 20...",
+  "Rolling a natural 1 (this could go poorly)...",
+  "Consulting with Gale about the Weave...",
+  "Asking Withers for guidance...",
+  "Convincing the narrator to help...",
+  "Looting every crate and barrel...",
+  "Quicksaving before this decision...",
+  "Gathering the party before venturing forth...",
+  "Boo is thinking... go for the eyes!",
+  "Channeling divine inspiration...",
+  "Attuning to a magic item...",
+  "Identifying mysterious runes...",
+  "Dispelling illusions...",
+
+  // Star Wars
+  "Searching my feelings...",
+  "Using the Force...",
+  "That's no moon, it's a solution...",
+  "Making the Kessel Run in 12 parsecs...",
+  "Consulting the Jedi Archives...",
+  "This is the way...",
+  "I have spoken...",
+  "Doing or doing not, there is no try...",
+  "Executing Order 66 on this bug...",
+  "Calibrating the hyperdrive...",
+  "The Force is strong with this one...",
+  "These aren't the droids you're looking for...",
+  "Spinning, that's a good trick...",
+  "Consulting with the Council...",
+  "Trusting in the Force...",
+  "Channeling my inner Yoda...",
+  "Strong with this code, the Force is not...",
+
+  // Lord of the Rings
+  "Consulting the palantír...",
+  "Taking the hobbits to Isengard...",
+  "Simply walking into Mordor...",
+  "Casting it into the fire...",
+  "Gathering the Fellowship...",
+  "You shall not pass (yet)...",
+  "Following the White Wizard...",
+  "Seeking wisdom from Rivendell...",
+  "The beacons are lit!",
+  "And my axe!",
+
+  // Dune
+  "The spice must flow...",
+  "Walking without rhythm...",
+  "Consulting the Bene Gesserit...",
+  "Fear is the mind-killer, processing anyway...",
+  "Riding the sandworm of thought...",
+  "The sleeper has awakened...",
+  "Folding space...",
+
+  // Warhammer 40K
+  "Appeasing the Machine Spirit...",
+  "Blessing the code with sacred oils...",
+  "The Emperor protects...",
+  "Purging heretical bugs...",
+  "Reciting the Litany of Compilation...",
+  "Consulting the Omnissiah...",
+  "For the glory of the Imperium!",
+
+  // The Witcher
+  "Tossing a coin to your debugger...",
+  "Brewing a Cat potion for focus...",
+  "Meditating to restore energy...",
+  "Following the Law of Surprise...",
+  "Hmm... winds howling...",
+
+  // Mass Effect
+  "Calibrating the calibrations...",
+  "We'll bang, ok? (with the compiler)...",
+  "I should go (think about this)...",
+  "Assuming direct control...",
+  "Shepard...",
+
+  // Hitchhiker's Guide
+  "Calculating the Answer to Life, Universe & Everything...",
+  "Don't panic...",
+  "Consulting the Guide...",
+  "Generating infinite improbability...",
+  "Thanks for all the fish...",
+
+  // Doctor Who
+  "Reversing the polarity of the neutron flow...",
+  "Wibbly wobbly, timey wimey processing...",
+  "Bigger on the inside than it appears...",
+  "Consulting the TARDIS databanks...",
+  "Allons-y!",
+
+  // Discworld
+  "Consulting the Librarian (ook)...",
+  "Avoiding the Luggage...",
+  "Death is THINKING ABOUT IT...",
+  "Narrative causality is processing...",
+  "The turtle moves...",
 ];
 
 function pickRandom(): string {
