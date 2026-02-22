@@ -67,6 +67,7 @@ If the user wants code only, skip the explanation but still follow this internal
 - Commit to a palette with a strong point‑of‑view
 - Avoid timid, overused gradients (e.g., purple‑to‑pink on white)
 - Use contrast intentionally and check legibility
+- **Verify contrast ratios for every text color on its background.** WCAG AA minimum: 4.5:1 for normal text, 3:1 for large text (18px+ bold or 24px+). Target AA at minimum; AAA (7:1) for body text when possible. Dark themes are especially prone to low contrast: a dim text color at 0.5 alpha on a dark background looks fine on a bright monitor but fails in practice. Watch for stacked opacity (a dim color token + an extra `opacity` property = double hit). Calculate the effective contrast; do not eyeball it.
 
 ### Composition & Layout
 - Encourage asymmetry, scale contrast, overlap, or grid breaks
@@ -102,6 +103,7 @@ If the user wants code only, skip the explanation but still follow this internal
 - Typography feels intentional and expressive
 - Layout and spacing are consistent and purposeful
 - Color palette feels cohesive and legible
+- **Text contrast passes WCAG AA (4.5:1) for all text colors on their backgrounds.** No stacked opacity that silently drops below threshold. Calculate, do not guess.
 - Interactions enhance the experience without clutter
 - Code runs as provided and is production‑ready
 
