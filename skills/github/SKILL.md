@@ -7,6 +7,12 @@ description: "Interact with GitHub using the `gh` CLI. Use `gh issue`, `gh pr`, 
 
 Use the `gh` CLI to interact with GitHub. Always specify `--repo owner/repo` when not in a git directory, or use URLs directly.
 
+## Important Restrictions
+
+**NEVER push without explicit user approval.** Before running any command that pushes commits, tags, or branches, ask the user for confirmation.
+
+**NEVER comment on issues, PRs, or commits on behalf of the user.** Do not use `gh pr comment`, `gh issue comment`, `gh pr review`, or any other commenting functionality. Draft comments for the user to post themselves.
+
 ## Pull Requests
 
 Check CI status on a PR:
