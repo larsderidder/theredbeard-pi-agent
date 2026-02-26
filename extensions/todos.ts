@@ -101,13 +101,32 @@ const TodoParams = Type.Object({
 		"delete",
 		"claim",
 		"release",
+		"batch-update",
 	] as const),
 	id: Type.Optional(
 		Type.String({ description: "Todo id (TODO-<hex> or raw hex filename)" }),
 	),
+	ids: Type.Optional(
+		Type.Array(Type.String({ description: "Todo id (TODO-<hex> or raw hex filename)" }), {
+			description: "Multiple todo ids for batch-update",
+		}),
+	),
+	filter: Type.Optional(
+		Type.Object({
+			tags: Type.Optional(Type.Array(Type.String(), { description: "Match todos having ALL of these tags" })),
+			status: Type.Optional(Type.String({ description: "Match todos with this status" })),
+			untagged: Type.Optional(Type.Boolean({ description: "Match todos with no tags" })),
+		}, { description: "Filter to select todos for batch-update (combined with ids via union)" }),
+	),
 	title: Type.Optional(Type.String({ description: "Short summary shown in lists" })),
 	status: Type.Optional(Type.String({ description: "Todo status" })),
 	tags: Type.Optional(Type.Array(Type.String({ description: "Todo tag" }))),
+	add_tags: Type.Optional(
+		Type.Array(Type.String(), { description: "Tags to add (batch-update). Merged with existing tags." }),
+	),
+	remove_tags: Type.Optional(
+		Type.Array(Type.String(), { description: "Tags to remove (batch-update)." }),
+	),
 	body: Type.Optional(
 		Type.String({ description: "Long-form details (markdown). Update replaces; append adds." }),
 	),
@@ -123,7 +142,8 @@ type TodoAction =
 	| "append"
 	| "delete"
 	| "claim"
-	| "release";
+	| "release"
+	| "batch-update";
 
 type TodoOverlayAction = "back" | "work";
 
@@ -143,6 +163,12 @@ type TodoToolDetails =
 	| {
 			action: "get" | "create" | "update" | "append" | "delete" | "claim" | "release";
 			todo: TodoRecord;
+			error?: string;
+		}
+	| {
+			action: "batch-update";
+			updated: TodoFrontMatter[];
+			skipped: Array<{ id: string; reason: string }>;
 			error?: string;
 		};
 
@@ -1442,10 +1468,13 @@ export default function todosExtension(pi: ExtensionAPI) {
 		name: "todo",
 		label: "Todo",
 		description:
-			`Manage file-based todos in ${todosDirLabel} (list, list-all, get, create, update, append, delete, claim, release). ` +
+			`Manage file-based todos in ${todosDirLabel} (list, list-all, get, create, update, append, delete, claim, release, batch-update). ` +
 			"Title is the short summary; body is long-form markdown notes (update replaces, append adds). " +
 			"Todo ids are shown as TODO-<hex>; id parameters accept TODO-<hex> or the raw hex filename. " +
-			"Claim tasks before working on them to avoid conflicts, and close them when complete.", 
+			"Claim tasks before working on them to avoid conflicts, and close them when complete. " +
+			"batch-update applies changes to multiple todos at once. Target todos by ids, filter (by tags/status/untagged), or both. " +
+			"Use add_tags/remove_tags for incremental tag changes, or tags to replace all tags. " +
+			"Example: batch-update with filter {status: 'open'} and add_tags ['sprint-3'] tags all open todos.", 
 		parameters: TodoParams,
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -1722,6 +1751,129 @@ export default function todosExtension(pi: ExtensionAPI) {
 						details: { action: "delete", todo: result as TodoRecord },
 					};
 				}
+
+				case "batch-update": {
+					// Resolve target todos: explicit ids + filter matches (union)
+					const targetIds = new Set<string>();
+					const skipped: Array<{ id: string; reason: string }> = [];
+
+					// Collect explicit ids
+					if (params.ids) {
+						for (const rawId of params.ids) {
+							const validated = validateTodoId(rawId);
+							if ("error" in validated) {
+								skipped.push({ id: rawId, reason: validated.error });
+							} else {
+								targetIds.add(validated.id);
+							}
+						}
+					}
+					if (params.id) {
+						const validated = validateTodoId(params.id);
+						if ("error" in validated) {
+							skipped.push({ id: params.id, reason: validated.error });
+						} else {
+							targetIds.add(validated.id);
+						}
+					}
+
+					// Collect filter matches
+					const filter = params.filter as { tags?: string[]; status?: string; untagged?: boolean } | undefined;
+					if (filter) {
+						const allTodos = await listTodos(todosDir);
+						for (const todo of allTodos) {
+							let matches = true;
+							if (filter.status && todo.status.toLowerCase() !== filter.status.toLowerCase()) {
+								matches = false;
+							}
+							if (filter.tags && filter.tags.length > 0) {
+								const todoTagsLower = todo.tags.map(t => t.toLowerCase());
+								for (const requiredTag of filter.tags) {
+									if (!todoTagsLower.includes(requiredTag.toLowerCase())) {
+										matches = false;
+										break;
+									}
+								}
+							}
+							if (filter.untagged && todo.tags.length > 0) {
+								matches = false;
+							}
+							if (matches) {
+								targetIds.add(todo.id);
+							}
+						}
+					}
+
+					if (targetIds.size === 0 && skipped.length === 0) {
+						return {
+							content: [{ type: "text", text: "No todos matched. Provide ids, filter, or both." }],
+							details: { action: "batch-update", updated: [], skipped, error: "no targets" },
+						};
+					}
+
+					// Apply updates to each matched todo
+					const updated: TodoFrontMatter[] = [];
+					for (const todoId of targetIds) {
+						const filePath = getTodoPath(todosDir, todoId);
+						if (!existsSync(filePath)) {
+							skipped.push({ id: todoId, reason: "not found" });
+							continue;
+						}
+						const lockResult = await withTodoLock(todosDir, todoId, ctx, async () => {
+							const existing = await ensureTodoExists(filePath, todoId);
+							if (!existing) {
+								skipped.push({ id: todoId, reason: "not found" });
+								return null;
+							}
+
+							if (params.status !== undefined) existing.status = params.status;
+							if (params.title !== undefined) existing.title = params.title;
+							if (params.tags !== undefined) existing.tags = params.tags;
+
+							// Additive/subtractive tag operations
+							if (params.add_tags) {
+								const currentLower = existing.tags.map(t => t.toLowerCase());
+								for (const tag of params.add_tags) {
+									if (!currentLower.includes(tag.toLowerCase())) {
+										existing.tags.push(tag);
+										currentLower.push(tag.toLowerCase());
+									}
+								}
+							}
+							if (params.remove_tags) {
+								const removeLower = new Set(params.remove_tags.map((t: string) => t.toLowerCase()));
+								existing.tags = existing.tags.filter(t => !removeLower.has(t.toLowerCase()));
+							}
+
+							clearAssignmentIfClosed(existing);
+							await writeTodoFile(filePath, existing);
+							return existing;
+						});
+
+						if (lockResult && typeof lockResult === "object" && "error" in lockResult) {
+							skipped.push({ id: todoId, reason: lockResult.error });
+						} else if (lockResult) {
+							const rec = lockResult as TodoRecord;
+							updated.push({
+								id: rec.id,
+								title: rec.title,
+								tags: rec.tags,
+								status: rec.status,
+								created_at: rec.created_at,
+								assigned_to_session: rec.assigned_to_session,
+							});
+						}
+					}
+
+					const summary = {
+						updated: updated.map(t => ({ id: formatTodoId(t.id), title: t.title, tags: t.tags, status: t.status })),
+						skipped: skipped.map(s => ({ id: formatTodoId(s.id), reason: s.reason })),
+					};
+					return {
+						content: [{ type: "text", text: JSON.stringify(summary, null, 2) }],
+						details: { action: "batch-update", updated, skipped },
+					};
+				}
 			}
 		},
 
@@ -1732,11 +1884,33 @@ export default function todosExtension(pi: ExtensionAPI) {
 			const normalizedId = id ? normalizeTodoId(id) : "";
 			const title = typeof args.title === "string" ? args.title : "";
 			let text = theme.fg("toolTitle", theme.bold("todo ")) + theme.fg("muted", action);
-			if (normalizedId) {
-				text += " " + theme.fg("accent", formatTodoId(normalizedId));
-			}
-			if (title) {
-				text += " " + theme.fg("dim", `"${title}"`);
+			if (action === "batch-update") {
+				const ids = Array.isArray(args.ids) ? args.ids : [];
+				const filter = args.filter as Record<string, unknown> | undefined;
+				const parts: string[] = [];
+				if (ids.length > 0) parts.push(`${ids.length} ids`);
+				if (filter) {
+					const filterParts: string[] = [];
+					if (filter.status) filterParts.push(`status=${filter.status}`);
+					if (Array.isArray(filter.tags) && filter.tags.length) filterParts.push(`tags=[${filter.tags.join(",")}]`);
+					if (filter.untagged) filterParts.push("untagged");
+					if (filterParts.length) parts.push(filterParts.join(", "));
+				}
+				if (parts.length) text += " " + theme.fg("dim", parts.join(" + "));
+				const addTags = Array.isArray(args.add_tags) ? args.add_tags : [];
+				const removeTags = Array.isArray(args.remove_tags) ? args.remove_tags : [];
+				const changes: string[] = [];
+				if (addTags.length) changes.push(`+[${addTags.join(",")}]`);
+				if (removeTags.length) changes.push(`-[${removeTags.join(",")}]`);
+				if (typeof args.status === "string") changes.push(`status=${args.status}`);
+				if (changes.length) text += " " + theme.fg("accent", changes.join(" "));
+			} else {
+				if (normalizedId) {
+					text += " " + theme.fg("accent", formatTodoId(normalizedId));
+				}
+				if (title) {
+					text += " " + theme.fg("dim", `"${title}"`);
+				}
 			}
 			return new Text(text, 0, 0);
 		},
@@ -1766,7 +1940,30 @@ export default function todosExtension(pi: ExtensionAPI) {
 				return new Text(text, 0, 0);
 			}
 
-			if (!details.todo) {
+			if (details.action === "batch-update") {
+				const { updated, skipped } = details;
+				const lines: string[] = [];
+				lines.push(theme.fg("success", "✓ ") + theme.fg("muted", `Updated ${updated.length} todo${updated.length !== 1 ? "s" : ""}`));
+				if (expanded) {
+					for (const todo of updated) {
+						const tagText = todo.tags.length ? theme.fg("dim", ` [${todo.tags.join(", ")}]`) : "";
+						lines.push("  " + theme.fg("accent", formatTodoId(todo.id)) + " " + theme.fg("text", getTodoTitle(todo)) + tagText);
+					}
+				}
+				if (skipped.length > 0) {
+					lines.push(theme.fg("warning", `Skipped ${skipped.length}:`));
+					for (const s of skipped) {
+						lines.push("  " + theme.fg("dim", `${s.id}: ${s.reason}`));
+					}
+				}
+				let text = lines.join("\n");
+				if (!expanded && updated.length > 0) {
+					text = appendExpandHint(theme, text);
+				}
+				return new Text(text, 0, 0);
+			}
+
+			if (!("todo" in details) || !details.todo) {
 				const text = result.content[0];
 				return new Text(text?.type === "text" ? text.text : "", 0, 0);
 			}
