@@ -1,7 +1,6 @@
 ---
 name: website
 description: Build fast, accessible, and SEO-friendly websites with modern best practices.
-metadata: {"clawdbot":{"emoji":"🌐","os":["linux","darwin","win32"]}}
 ---
 
 # Website Development Rules
@@ -47,6 +46,12 @@ metadata: {"clawdbot":{"emoji":"🌐","os":["linux","darwin","win32"]}}
 - Hardcoded `http://` links break on HTTPS sites — use protocol-relative `//` or always `https://`
 - Assuming JavaScript is available — core content should work without JS (progressive enhancement)
 - Forgetting print styles — add `@media print` for pages users might print (receipts, articles)
+
+## SEO / Indexing
+- Canonical URLs must match the actual URL the server serves — a mismatch (e.g. trailing slash vs no trailing slash) confuses Google and can prevent indexing
+- Every content page needs at least one internal link pointing to it — pages only in a sitemap but with no referring page are deprioritized by Google's crawler
+- Content filters in templates can silently exclude pages from navigation — verify all pages are reachable by following links from the homepage, not just by checking the sitemap
+- "Discovered - currently not indexed" in Search Console usually means no internal links, not a technical block — fix linking first before requesting indexing
 
 ## Before Launch
 - Test all forms actually submit — broken contact forms lose leads silently
