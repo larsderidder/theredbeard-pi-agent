@@ -15,6 +15,12 @@ Personal pi coding agent package — extensions, skills, themes, and prompts.
 | `session-breakdown.ts` | `/session-breakdown` — GitHub-style usage analytics over 7/30/90 days |
 | `todos.ts` | `/todos` — file-backed todo manager with TUI and agent tool |
 | `fun-prompts.ts` | Replaces "Thinking..." with random fun messages |
+| `walkthrough.ts` | `/walkthrough [path]` — walk through unstaged diff hunks one by one; agent explains each on demand |
+| `datetime.ts` | `get_current_datetime` tool — returns current date, time, and timezone |
+| `credential-scrubber.ts` | `scrub_credential` tool — detects and scrubs secrets from the session file on disk |
+| `searxng.ts` | `web_search` tool — self-hosted SearXNG metasearch (set `SEARXNG_URL` env var) |
+| `subagent/` | `subagent` tool — delegate tasks to specialized agents in single, parallel, or chain mode |
+| `codex-cli-provider/` | Wraps the `codex` CLI as a pi model provider |
 
 ## Skills
 
@@ -26,6 +32,7 @@ Personal pi coding agent package — extensions, skills, themes, and prompts.
 | `frontend-design` | Design and implement distinctive frontend interfaces | — |
 | `mermaid` | Create and validate Mermaid diagrams | Node.js (npx) |
 | `summarize` | URL/file → Markdown via `markitdown`, optional summarization | `uvx`, `markitdown` |
+| `readability` | Score text readability against benchmarks for practitioner-grade technical writing | `textstat` (auto-installed) |
 
 ## Install
 
