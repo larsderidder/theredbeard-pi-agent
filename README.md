@@ -1,6 +1,6 @@
 # theredbeard-pi-agent
 
-Personal pi coding agent package — extensions, skills, themes, and prompts.
+Personal pi coding agent package: extensions, skills, themes, and prompts.
 
 ## Extensions
 
@@ -32,7 +32,6 @@ Personal pi coding agent package — extensions, skills, themes, and prompts.
 | `frontend-design` | Design and implement distinctive frontend interfaces | — |
 | `mermaid` | Create and validate Mermaid diagrams | Node.js (npx) |
 | `summarize` | URL/file → Markdown via `markitdown`, optional summarization | `uvx`, `markitdown` |
-| `readability` | Score text readability against benchmarks for practitioner-grade technical writing | `textstat` (auto-installed) |
 
 ## Install
 
