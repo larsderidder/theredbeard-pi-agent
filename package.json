@@ -24,7 +24,7 @@
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",
     "@mariozechner/pi-coding-agent": "*",
-    "@mariozechner/pi-tui": "*",
+    "@mariozechner/pi-tui": "^0.62.0",
     "@sinclair/typebox": "*"
   },
   "dependencies": {
