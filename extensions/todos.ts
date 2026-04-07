@@ -47,12 +47,30 @@ import {
 	type SelectItem,
 	Text,
 	TUI,
-	fuzzyMatch,
-	getEditorKeybindings,
 	matchesKey,
 	truncateToWidth,
 	visibleWidth,
 } from "@mariozechner/pi-tui";
+
+// getEditorKeybindings was added to pi-tui after the published version.
+// Shim it using the existing getKeybindings() with namespaced key IDs.
+import { getKeybindings } from "@mariozechner/pi-tui";
+function getEditorKeybindings() {
+	const kb = getKeybindings();
+	return {
+		matches(data: string, action: string): boolean {
+			const nameMap: Record<string, string> = {
+				selectUp: "tui.select.up",
+				selectDown: "tui.select.down",
+				selectPageUp: "tui.select.pageUp",
+				selectPageDown: "tui.select.pageDown",
+				selectConfirm: "tui.select.confirm",
+				selectCancel: "tui.select.cancel",
+			};
+			return kb.matches(data, nameMap[action] ?? action);
+		},
+	};
+}
 
 const TODO_DIR_NAME = ".pi/todos";
 const TODO_PATH_ENV = "PI_TODO_PATH";
@@ -150,7 +168,8 @@ type TodoOverlayAction = "back" | "work";
 type TodoMenuAction =
 	| "work"
 	| "refine"
-	| "close"
+	| "review"
+	| "done"
 	| "reopen"
 	| "release"
 	| "delete"
@@ -240,16 +259,17 @@ function filterTodos(todos: TodoFrontMatter[], query: string): TodoFrontMatter[]
 
 	const matches: Array<{ todo: TodoFrontMatter; score: number }> = [];
 	for (const todo of todos) {
-		const text = buildTodoSearchText(todo);
+		const text = buildTodoSearchText(todo).toLowerCase();
 		let totalScore = 0;
 		let matched = true;
 		for (const token of tokens) {
-			const result = fuzzyMatch(token, text);
-			if (!result.matches) {
+			const tokenLower = token.toLowerCase();
+			const index = text.indexOf(tokenLower);
+			if (index === -1) {
 				matched = false;
 				break;
 			}
-			totalScore += result.score;
+			totalScore += index;
 		}
 		if (matched) {
 			matches.push({ todo, score: totalScore });
@@ -503,8 +523,11 @@ class TodoActionMenuComponent extends Container {
 			{ value: "work", label: "work", description: "Work on todo" },
 			{ value: "refine", label: "refine", description: "Refine task" },
 			...(closed
-				? [{ value: "reopen", label: "reopen", description: "Reopen todo" }]
-				: [{ value: "close", label: "close", description: "Close todo" }]),
+				? [{ value: "reopen", label: "reopen", description: "Set status back to open" }]
+				: [
+					{ value: "review", label: "mark for review", description: "Work is done, needs your review" },
+					{ value: "done", label: "mark done", description: "Fully complete, no review needed" },
+				  ]),
 			...(todo.assigned_to_session
 				? [{ value: "release", label: "release", description: "Release assignment" }]
 				: []),
@@ -1457,9 +1480,19 @@ async function deleteTodo(
 export default function todosExtension(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		const todosDir = getTodosDir(ctx.cwd);
-		await ensureTodosDir(todosDir);
-		const settings = await readTodoSettings(todosDir);
-		await garbageCollectTodos(todosDir, settings);
+		// Only run GC if the directory already exists. Do not create it eagerly
+		// so that projects without todos don't get a .pi/todos folder on startup.
+		let dirExists = false;
+		try {
+			await fs.access(todosDir);
+			dirExists = true;
+		} catch {
+			// directory doesn't exist yet — nothing to do
+		}
+		if (dirExists) {
+			const settings = await readTodoSettings(todosDir);
+			await garbageCollectTodos(todosDir, settings);
+		}
 	});
 
 	const todosDirLabel = getTodosDirLabel(process.cwd());
@@ -1471,7 +1504,8 @@ export default function todosExtension(pi: ExtensionAPI) {
 			`Manage file-based todos in ${todosDirLabel} (list, list-all, get, create, update, append, delete, claim, release, batch-update). ` +
 			"Title is the short summary; body is long-form markdown notes (update replaces, append adds). " +
 			"Todo ids are shown as TODO-<hex>; id parameters accept TODO-<hex> or the raw hex filename. " +
-			"Claim tasks before working on them to avoid conflicts, and close them when complete. " +
+			"Claim tasks before working on them to avoid conflicts. " +
+			"When you finish work on a task, set status to 'review' (not 'done') so the owner can review it. Only set status to 'done' if explicitly asked to. " +
 			"batch-update applies changes to multiple todos at once. Target todos by ids, filter (by tags/status/untagged), or both. " +
 			"Use add_tags/remove_tags for incremental tag changes, or tags to replace all tags. " +
 			"Example: batch-update with filter {status: 'open'} and add_tags ['sprint-3'] tags all open todos.", 
@@ -2161,7 +2195,7 @@ export default function todosExtension(pi: ExtensionAPI) {
 						return "stay";
 					}
 
-					const nextStatus = action === "close" ? "closed" : "open";
+					const nextStatus = action === "review" ? "review" : action === "done" ? "done" : "open";
 					const result = await updateTodoStatus(todosDir, record.id, nextStatus, ctx);
 					if ("error" in result) {
 						ctx.ui.notify(result.error, "error");
@@ -2171,7 +2205,7 @@ export default function todosExtension(pi: ExtensionAPI) {
 					const updatedTodos = await listTodos(todosDir);
 					selector?.setTodos(updatedTodos);
 					ctx.ui.notify(
-						`${action === "close" ? "Closed" : "Reopened"} todo ${formatTodoId(record.id)}`,
+						`${action === "review" ? "Marked for review" : action === "done" ? "Marked done" : "Reopened"}: ${formatTodoId(record.id)}`,
 						"info",
 					);
 					return "stay";
