@@ -3,22 +3,24 @@
 Loop task script template for /loop-subagent.
 
 Interface (called by the loop extension):
-  script.py info              → key=value metadata (optional)
-  script.py queue             → next item on stdout + exit 0; exit 1 if nothing left
-  script.py prompt <item>     → full LLM worker prompt on stdout + exit 0
+  script.py info [param]             → key=value metadata (optional)
+  script.py queue [param]            → next item on stdout + exit 0; exit 1 if nothing left
+  script.py prompt <item> [param]    → full LLM worker prompt on stdout + exit 0
 
 Usage:
   /loop-subagent /path/to/script.py
+  /loop-subagent /path/to/script.py "optional task parameter"
 
 The extension calls `queue` before each iteration. If it exits 1, the loop stops
 without spawning a worker. If it exits 0, the item (stdout) is passed to `prompt`,
-which returns the full prompt for `pi -p --no-session`.
+which returns the full prompt for `pi -p --no-session`. If a parameter is supplied
+after the script path, it is passed to `info`, `queue`, `prompt`, and `verify`.
 """
 
 import sys
 
 
-def info() -> None:
+def info(param: str | None = None) -> None:
     """
     Print key=value metadata for the loop extension.
     Supported keys:
@@ -31,7 +33,7 @@ def info() -> None:
     pass
 
 
-def queue() -> None:
+def queue(param: str | None = None) -> None:
     """
     Print the next item to process and exit 0.
     Exit 1 if there is nothing left to do (loop stops).
@@ -56,7 +58,7 @@ def queue() -> None:
     sys.exit(1)  # nothing to do by default
 
 
-def prompt(item: str) -> None:
+def prompt(item: str, param: str | None = None) -> None:
     """
     Print the full LLM worker prompt for the given item and exit 0.
 
@@ -85,12 +87,12 @@ if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
 
     if cmd == "info":
-        info()
+        info(sys.argv[2] if len(sys.argv) > 2 else None)
     elif cmd == "queue":
-        queue()
+        queue(sys.argv[2] if len(sys.argv) > 2 else None)
     elif cmd == "prompt":
         item = sys.argv[2] if len(sys.argv) > 2 else ""
-        prompt(item)
+        prompt(item, sys.argv[3] if len(sys.argv) > 3 else None)
     else:
         print(f"Usage: {sys.argv[0]} info | queue | prompt <item>", file=sys.stderr)
         sys.exit(2)

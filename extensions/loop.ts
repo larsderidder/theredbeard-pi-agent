@@ -5,10 +5,10 @@
  * /loop-subagent   — isolated loop: spawns fresh `pi -p --no-session` per iteration
  *
  * /loop-subagent accepts a task script with this interface:
- *   script queue              → stdout: item context, exit 0; exit 1 = all done
- *   script prompt <item>      → stdout: full worker prompt for this item, exit 0
- *   script verify <item>      → exit 0 = pass, exit 1 = fail (stdout: error details). Optional.
- *   script info               → stdout: key=value pairs (cwd=, description=), exit 0 (optional)
+ *   script queue [param]              → stdout: item context, exit 0; exit 1 = all done
+ *   script prompt <item> [param]      → stdout: full worker prompt for this item, exit 0
+ *   script verify <item> [param]      → exit 0 = pass, exit 1 = fail (stdout: error details). Optional.
+ *   script info [param]               → stdout: key=value pairs (cwd=, description=), exit 0 (optional)
  *
  * If verify is implemented and fails, the item is retried with the error details
  * appended to the prompt as correction instructions. Max 1 retry per item.
@@ -41,6 +41,8 @@ type LoopStateData = {
 	condition?: string;
 	/** Inline modes: the repeated prompt. Script mode: the script path. */
 	prompt?: string;
+	/** Optional parameter passed to task scripts after the command/item. */
+	scriptParam?: string;
 	summary?: string;
 	loopCount?: number;
 	autoCommit?: boolean;
@@ -149,7 +151,7 @@ function getScriptInvocation(scriptPath: string): { cmd: string; args: string[] 
 /**
  * Read optional metadata from `script info`.
  */
-function readScriptInfo(scriptPath: string, cwd: string): TaskScriptInfo {
+function readScriptInfo(scriptPath: string, cwd: string, scriptParam?: string): TaskScriptInfo {
 	const inv = getScriptInvocation(scriptPath);
 	const info: TaskScriptInfo = {
 		scriptPath,
@@ -157,7 +159,7 @@ function readScriptInfo(scriptPath: string, cwd: string): TaskScriptInfo {
 	};
 
 	try {
-		const out = execFileSync(inv.cmd, [...inv.args, "info"], {
+		const out = execFileSync(inv.cmd, [...inv.args, "info", ...(scriptParam ? [scriptParam] : [])], {
 			cwd,
 			timeout: 5000,
 			encoding: "utf-8",
@@ -190,10 +192,11 @@ function runScriptQueue(
 	scriptPath: string,
 	cwd: string,
 	signal?: AbortSignal,
+	scriptParam?: string,
 ): Promise<string | null> {
 	return new Promise((resolve, reject) => {
 		const inv = getScriptInvocation(scriptPath);
-		const proc = spawn(inv.cmd, [...inv.args, "queue"], {
+		const proc = spawn(inv.cmd, [...inv.args, "queue", ...(scriptParam ? [scriptParam] : [])], {
 			cwd,
 			stdio: ["ignore", "pipe", "pipe"],
 		});
@@ -231,10 +234,11 @@ function runScriptPrompt(
 	scriptPath: string,
 	cwd: string,
 	item: string,
+	scriptParam?: string,
 ): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const inv = getScriptInvocation(scriptPath);
-		const proc = spawn(inv.cmd, [...inv.args, "prompt", item], {
+		const proc = spawn(inv.cmd, [...inv.args, "prompt", item, ...(scriptParam ? [scriptParam] : [])], {
 			cwd,
 			stdio: ["ignore", "pipe", "pipe"],
 		});
@@ -266,10 +270,11 @@ function runScriptVerify(
 	scriptPath: string,
 	cwd: string,
 	item: string,
+	scriptParam?: string,
 ): Promise<string | null> {
 	return new Promise((resolve) => {
 		const inv = getScriptInvocation(scriptPath);
-		const proc = spawn(inv.cmd, [...inv.args, "verify", item], {
+		const proc = spawn(inv.cmd, [...inv.args, "verify", item, ...(scriptParam ? [scriptParam] : [])], {
 			cwd,
 			stdio: ["ignore", "pipe", "pipe"],
 		});
@@ -737,7 +742,8 @@ export default function loopExtension(pi: ExtensionAPI): void {
 		};
 
 		const scriptPath = loopState.prompt!;
-		const iterCwd = readScriptInfo(scriptPath, ctx.cwd).cwd;
+		const scriptParam = loopState.scriptParam;
+		const iterCwd = readScriptInfo(scriptPath, ctx.cwd, scriptParam).cwd;
 
 		while (loopState.active && loopState.subagent) {
 			const loopCount = (loopState.loopCount ?? 0) + 1;
@@ -747,7 +753,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
 			let item: string | null;
 			try {
-				item = await runScriptQueue(scriptPath, iterCwd, signal);
+				item = await runScriptQueue(scriptPath, iterCwd, signal, scriptParam);
 			} catch (err) {
 				ctx.ui.notify(`Queue error: ${err instanceof Error ? err.message : String(err)}`, "warning");
 				loopDetails.status = "failed";
@@ -770,7 +776,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
 			let workerPrompt: string;
 			try {
-				workerPrompt = await runScriptPrompt(scriptPath, iterCwd, item);
+				workerPrompt = await runScriptPrompt(scriptPath, iterCwd, item, scriptParam);
 			} catch (err) {
 				ctx.ui.notify(`Prompt error: ${err instanceof Error ? err.message : String(err)}`, "warning");
 				loopDetails.status = "failed";
@@ -819,7 +825,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
 			// Post-worker verification: run `script verify <item>` if available
 			if (iter.status === "done") {
-				const verifyError = await runScriptVerify(scriptPath, iterCwd, item);
+				const verifyError = await runScriptVerify(scriptPath, iterCwd, item, scriptParam);
 				if (verifyError) {
 					// Verification failed — retry once with error feedback
 					iter.status = "failed";
@@ -832,7 +838,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
 					if (retryResult.exitCode === 0) {
 						// Check again
-						const retryVerify = await runScriptVerify(scriptPath, iterCwd, item);
+						const retryVerify = await runScriptVerify(scriptPath, iterCwd, item, scriptParam);
 						if (!retryVerify) {
 							iter.status = "done";
 							iter.finalOutput = retryResult.finalOutput + " (fixed after retry)";
@@ -956,16 +962,27 @@ export default function loopExtension(pi: ExtensionAPI): void {
 	// Argument parser
 	// -------------------------------------------------------------------------
 
+	function splitArgs(input: string): string[] {
+		const parts: string[] = [];
+		const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g;
+		let match: RegExpExecArray | null;
+		while ((match = pattern.exec(input)) !== null) {
+			parts.push(match[1] ?? match[2] ?? match[3] ?? "");
+		}
+		return parts;
+	}
+
 	function parseArgs(args: string | undefined): LoopStateData | null {
 		if (!args?.trim()) return null;
-		const parts = args.trim().split(/\s+/);
+		const parts = splitArgs(args.trim());
 
 		const hasNoCommit = parts.includes("--no-commit");
 		const filteredParts = parts.filter((p) => p !== "--no-commit");
 		const autoCommit = !hasNoCommit;
 
 		const firstArg = filteredParts[0] ?? "";
-		const filePath = filteredParts.join(" ").trim();
+		const scriptParam = filteredParts.slice(1).join(" ").trim() || undefined;
+		const filePath = firstArg;
 		const looksLikePath =
 			firstArg.includes("/") ||
 			firstArg.includes("\\") ||
@@ -982,12 +999,13 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
 			// Task script: mechanical queue/prompt interface
 			if (isTaskScript(resolvedPath) && existsSync(resolvedPath)) {
-				const info = readScriptInfo(resolvedPath, dirname(resolvedPath));
+				const info = readScriptInfo(resolvedPath, dirname(resolvedPath), scriptParam);
 				return {
 					active: true,
 					mode: "script",
 					// Store the script path in prompt field for persistence
 					prompt: resolvedPath,
+					scriptParam,
 					condition: info.description ?? `queue from ${basename(resolvedPath)}`,
 					autoCommit: false,
 				};
@@ -1219,12 +1237,12 @@ export default function loopExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("loop-subagent", {
-		description: "Like /loop but spawns a fresh pi process per iteration (no context accumulation). Accepts a task script (.py/.sh/.ts/.js) or built-in modes (todos, tests, etc.).",
+		description: "Like /loop but spawns a fresh pi process per iteration. Accepts a task script and optional task parameter.",
 		handler: async (args, ctx) => {
 			let nextState = parseArgs(args);
 			if (!nextState) {
 				if (!ctx.hasUI) {
-					ctx.ui.notify("Usage: /loop-subagent <task.py> | todos [tag] | tests | custom <cond> | self", "warning");
+					ctx.ui.notify("Usage: /loop-subagent <task.py> [param] | todos [tag] | tests | custom <cond> | self", "warning");
 					return;
 				}
 				nextState = await showLoopSelector(ctx);
