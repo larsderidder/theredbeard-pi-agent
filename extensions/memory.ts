@@ -21,11 +21,11 @@
  *   /memory-forget   — Interactively remove a specific entry from a memory file
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { DynamicBorder, getMarkdownTheme } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { StringEnum } from "@mariozechner/pi-ai";
-import { Container, Markdown, Text, matchesKey } from "@mariozechner/pi-tui";
+import { StringEnum } from "@earendil-works/pi-ai";
+import { Container, Markdown, Text, matchesKey } from "@earendil-works/pi-tui";
 import fs from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";

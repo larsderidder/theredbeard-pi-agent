@@ -22,13 +22,13 @@
     ]
   },
   "peerDependencies": {
-    "@mariozechner/pi-ai": "*",
-    "@mariozechner/pi-coding-agent": "*",
-    "@mariozechner/pi-tui": "^0.62.0",
-    "@sinclair/typebox": "*"
+    "@earendil-works/pi-ai": "^0.75.3",
+    "@earendil-works/pi-coding-agent": "^0.75.3",
+    "@earendil-works/pi-tui": "^0.75.3",
+    "@sinclair/typebox": "^0.34.49"
   },
   "dependencies": {
-    "puppeteer": "^24.37.3",
+    "puppeteer": "^25.0.4",
     "sharp": "^0.34.5"
   }
 }

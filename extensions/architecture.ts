@@ -9,7 +9,7 @@
  *   and suggests updating when a threshold is crossed in a single agent run
  */
 
-import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import path from "node:path";
 import fs from "node:fs";
 

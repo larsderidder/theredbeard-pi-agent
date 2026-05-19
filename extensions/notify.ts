@@ -6,8 +6,8 @@
  * OSC 777 for supported terminals (Ghostty, iTerm2, WezTerm, rxvt-unicode).
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Markdown, type MarkdownTheme } from "@mariozechner/pi-tui";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
 
 /**

@@ -10,8 +10,8 @@
  *   /walkthrough src/     - limit to a path
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 
 // ---------------------------------------------------------------------------
 // Diff parsing

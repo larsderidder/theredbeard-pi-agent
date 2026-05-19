@@ -29,8 +29,8 @@
  * Use `/todos` to bring up the visual todo manager or just let the LLM use them
  * naturally.
  */
-import { DynamicBorder, copyToClipboard, getMarkdownTheme, keyHint, type ExtensionAPI, type ExtensionContext, type Theme } from "@mariozechner/pi-coding-agent";
-import { StringEnum } from "@mariozechner/pi-ai";
+import { DynamicBorder, copyToClipboard, getMarkdownTheme, keyHint, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
+import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "@sinclair/typebox";
 import path from "node:path";
 import fs from "node:fs/promises";
@@ -50,11 +50,11 @@ import {
 	matchesKey,
 	truncateToWidth,
 	visibleWidth,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 
 // getEditorKeybindings was added to pi-tui after the published version.
 // Shim it using the existing getKeybindings() with namespaced key IDs.
-import { getKeybindings } from "@mariozechner/pi-tui";
+import { getKeybindings } from "@earendil-works/pi-tui";
 function getEditorKeybindings() {
 	const kb = getKeybindings();
 	return {

@@ -6,7 +6,7 @@
  * with the user, then rewrites the session file replacing all occurrences with [REDACTED].
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { readFileSync, writeFileSync } from "node:fs";
 

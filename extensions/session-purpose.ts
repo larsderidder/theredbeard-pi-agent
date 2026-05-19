@@ -14,9 +14,9 @@
  *   /purpose clear    <- clears the purpose
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { convertToLlm, serializeConversation } from "@mariozechner/pi-coding-agent";
-import { complete } from "@mariozechner/pi-ai";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
+import { complete } from "@earendil-works/pi-ai";
 
 const CUSTOM_TYPE = "session-purpose";
 const STATUS_KEY = "session-purpose";

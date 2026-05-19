@@ -7,8 +7,8 @@
  * Install globally: ~/.pi/agent/extensions/screenshot/
  */
 
-import { Type } from "@mariozechner/pi-ai";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Type } from "@earendil-works/pi-ai";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import puppeteer from "puppeteer";
 import sharp from "sharp";
 import * as path from "node:path";

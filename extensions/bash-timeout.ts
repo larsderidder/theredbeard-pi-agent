@@ -13,7 +13,7 @@
  * it just can't accidentally leave it unset on a potentially blocking command.
  */
 
-import { createBashTool, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { createBashTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const DEFAULT_TIMEOUT_SECS = 30;
 const MAX_TIMEOUT_SECS = 120;
