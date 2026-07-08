@@ -6,7 +6,7 @@
  * tool hangs until Escape is pressed.
  *
  * This extension overrides the bash tool to enforce a default timeout of 30s
- * when none is set by the model, and caps any supplied value at 120s.
+ * when none is set by the model, and caps any supplied value at 600s.
  *
  * The model's own system-prompt description already says "Optionally provide a
  * timeout in seconds" so the LLM can still request a longer one explicitly;
@@ -16,7 +16,7 @@
 import { createBashTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const DEFAULT_TIMEOUT_SECS = 30;
-const MAX_TIMEOUT_SECS = 120;
+const MAX_TIMEOUT_SECS = 600;
 
 export default function (pi: ExtensionAPI) {
 	const cwd = process.cwd();

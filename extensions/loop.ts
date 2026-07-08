@@ -1241,6 +1241,10 @@ export default function loopExtension(pi: ExtensionAPI): void {
 		handler: async (args, ctx) => {
 			let nextState = parseArgs(args);
 			if (!nextState) {
+				if (args?.trim()) {
+					ctx.ui.notify("Could not parse /loop-subagent arguments. Use: /loop-subagent <task.py> [param]", "warning");
+					return;
+				}
 				if (!ctx.hasUI) {
 					ctx.ui.notify("Usage: /loop-subagent <task.py> [param] | todos [tag] | tests | custom <cond> | self", "warning");
 					return;

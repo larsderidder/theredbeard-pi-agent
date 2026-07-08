@@ -3,8 +3,17 @@
  *
  * Gives pi persistent memory across sessions at two scopes:
  *
- *   Global  ~/.pi/agent/MEMORY.md   — preferences, style, cross-project facts
- *   Project .pi/MEMORY.md           — facts specific to the current codebase
+ *   Global  ~/.pi/agent/MEMORY.md   : preferences, style, cross-project facts
+ *   Project .pi/MEMORY.md           : facts specific to the current codebase
+ *
+ * Memory is deliberately a last resort. Prefer source-adjacent context first:
+ * scripts, comments, README files, AGENTS.md, docs/internal notes, or tool and
+ * extension descriptions. Those places are easier for agents to discover and
+ * keep the note close to the behavior it explains.
+ *
+ * Use memory for stable personal, domain, or business facts that do not have a
+ * better technical home. Avoid saving transient task state or technical guidance
+ * that belongs near the relevant source code.
  *
  * On agent_start both files are injected into the system prompt so every turn
  * has access to them from the very first message.
@@ -17,8 +26,8 @@
  * even after many sessions of accumulated notes.
  *
  * Commands:
- *   /memory          — Open an interactive viewer/editor for both memory files
- *   /memory-forget   — Interactively remove a specific entry from a memory file
+ *   /memory          : Open an interactive viewer/editor for both memory files
+ *   /memory-forget   : Interactively remove a specific entry from a memory file
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -312,21 +321,21 @@ export default function memoryExtension(pi: ExtensionAPI) {
 		name: "remember",
 		label: "Remember",
 		description:
-			"Save a fact, preference, or decision to memory so it is available in future sessions. " +
-			"Use scope 'global' for preferences and facts that apply across all projects " +
-			"(writing style, tooling choices, personal preferences). " +
-			"Use scope 'project' for facts specific to this codebase " +
-			"(architecture notes, recurring patterns, key decisions). " +
+			"Save a stable personal, domain, or business fact to memory so it is available in future sessions. " +
+			"Use memory as a last resort. If the note has a technical home, prefer updating the nearest source-adjacent artifact instead: " +
+			"a script, comment, README, AGENTS.md, docs/internal note, clear entry point, or tool/extension description. " +
+			"Use scope 'global' for facts that apply across all projects and have no better technical home. " +
+			"Use scope 'project' for codebase-specific domain facts, business context, or decisions that do not belong near source code. " +
 			"Keep entries concise: one clear fact per call. " +
-			"Do NOT call this for transient information that is only relevant to the current task.",
+			"Do NOT call this for transient task state, implementation notes, or technical guidance that belongs near the relevant code or tool.",
 		parameters: Type.Object({
 			fact: Type.String({
-				description: "The fact to remember. One sentence, imperative or declarative.",
+				description: "The stable fact to remember. One sentence, imperative or declarative.",
 			}),
 			scope: StringEnum(["global", "project"] as const, {
 				description:
-					"'global' saves to ~/.pi/agent/MEMORY.md (cross-project). " +
-					"'project' saves to .pi/MEMORY.md (this codebase only).",
+					"'global' saves to ~/.pi/agent/MEMORY.md for cross-project personal, domain, or business facts. " +
+					"'project' saves to .pi/MEMORY.md for this codebase only, when no source-adjacent artifact is a better fit.",
 			}),
 		}),
 
@@ -343,7 +352,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
 				);
 				if (!ok) {
 					return {
-						content: [{ type: "text", text: "User declined — fact not saved." }],
+						content: [{ type: "text", text: "User declined: fact not saved." }],
 						details: { saved: false, scope: params.scope, fact: params.fact },
 					};
 				}
@@ -363,7 +372,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	// /memory — view both memory files.
+	// /memory: view both memory files.
 	pi.registerCommand("memory", {
 		description: "Show global and project memory",
 		handler: async (_args, ctx) => {
@@ -371,7 +380,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	// /memory-forget — interactively remove an entry.
+	// /memory-forget: interactively remove an entry.
 	pi.registerCommand("memory-forget", {
 		description: "Remove an entry from global or project memory",
 		handler: async (_args, ctx) => {

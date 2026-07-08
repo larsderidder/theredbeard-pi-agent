@@ -7,6 +7,10 @@
     "pi-package",
     "pi-extension"
   ],
+  "scripts": {
+    "test:search-security": "node scripts/test-search-security.mjs",
+    "test:search-security:live": "node scripts/test-search-security.mjs --live"
+  },
   "pi": {
     "extensions": [
       "./extensions"

@@ -18,9 +18,11 @@ Personal pi coding agent package: extensions, skills, themes, and prompts.
 | `walkthrough.ts` | `/walkthrough [path]` — walk through unstaged diff hunks one by one; agent explains each on demand |
 | `datetime.ts` | `get_current_datetime` tool — returns current date, time, and timezone |
 | `credential-scrubber.ts` | `scrub_credential` tool — detects and scrubs secrets from the session file on disk |
-| `searxng.ts` | `web_search` tool — self-hosted SearXNG metasearch (set `SEARXNG_URL` env var) |
-| `subagent/` | `subagent` tool — delegate tasks to specialized agents in single, parallel, or chain mode |
-| `codex-cli-provider/` | Wraps the `codex` CLI as a pi model provider |
+| `convert-local-document.ts` | `convert_local_document` tool, local rich document to Markdown conversion for absolute file paths only. Remote URLs are rejected. |
+| `fork-terminal.ts` | `/fork-terminal`, `/clone-terminal`, `/btw`, and `clone-terminal` / `loop-terminal` tools for launching pi sessions in new terminals |
+| `move-session.ts` | `/move-session <directory>` — copy the current session history to another directory and switch to it |
+| `session-peers.ts` | `session_peers` tool and `/session-peers` command for checking recent activity in related pi sessions |
+| `worktree.ts` | `/worktree <name> [branch]` — create a sibling git worktree and switch the agent workflow to it |
 
 ## Skills
 
@@ -32,6 +34,13 @@ Personal pi coding agent package: extensions, skills, themes, and prompts.
 | `frontend-design` | Design and implement distinctive frontend interfaces | — |
 | `mermaid` | Create and validate Mermaid diagrams | Node.js (npx) |
 | `summarize` | URL/file → Markdown via `markitdown`, optional summarization | `uvx`, `markitdown` |
+
+## Tests
+
+```bash
+npm run test:search-security
+npm run test:search-security:live
+```
 
 ## Install
 
