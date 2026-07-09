@@ -16,8 +16,7 @@ import sharp from "sharp";
 
 const MAX_DIMENSION = 2000;
 
-const GODOT_BIN =
-	"/home/lars/.local/bin/godot";
+const GODOT_BIN = process.env.GODOT_BIN || process.env.GODOT4_BIN || "godot";
 const PROJECT_DIR = process.env.GODOT_PROJECT_DIR || process.cwd() + "/godot";
 
 /** Kill any lingering Godot processes from previous screenshot runs. */
