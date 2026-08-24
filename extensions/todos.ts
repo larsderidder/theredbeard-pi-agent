@@ -5,7 +5,7 @@
  *
  * File format in .pi/todos:
  * - The file starts with a JSON object (not YAML) containing the front matter:
- *   { id, title, tags, status, created_at, assigned_to_session }
+ *   { id, title, tags, status, created_at, assigned_to_session, project_id }
  * - After the JSON block comes optional markdown body text separated by a blank line.
  * - Example:
  *   {
@@ -14,7 +14,8 @@
  *     "tags": ["qa"],
  *     "status": "open",
  *     "created_at": "2026-01-25T17:00:00.000Z",
- *     "assigned_to_session": "session.json"
+ *     "assigned_to_session": "session.json",
+ *     "project_id": "deadbeef"
  *   }
  *
  *   Notes about the work go here.
@@ -29,9 +30,9 @@
  * Use `/todos` to bring up the visual todo manager or just let the LLM use them
  * naturally.
  */
-import { DynamicBorder, copyToClipboard, getMarkdownTheme, keyHint, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, copyToClipboard, getMarkdownTheme, keyHint, withFileMutationQueue, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -59,7 +60,7 @@ function getEditorKeybindings() {
 	const kb = getKeybindings();
 	return {
 		matches(data: string, action: string): boolean {
-			const nameMap: Record<string, string> = {
+			const nameMap: Record<string, Parameters<typeof kb.matches>[1]> = {
 				selectUp: "tui.select.up",
 				selectDown: "tui.select.down",
 				selectPageUp: "tui.select.pageUp",
@@ -67,7 +68,11 @@ function getEditorKeybindings() {
 				selectConfirm: "tui.select.confirm",
 				selectCancel: "tui.select.cancel",
 			};
-			return kb.matches(data, nameMap[action] ?? action);
+			const keybinding = nameMap[action];
+			if (!keybinding) {
+				return false;
+			}
+			return kb.matches(data, keybinding);
 		},
 	};
 }
@@ -77,6 +82,10 @@ const TODO_PATH_ENV = "PI_TODO_PATH";
 const TODO_SETTINGS_NAME = "settings.json";
 const TODO_ID_PREFIX = "TODO-";
 const TODO_ID_PATTERN = /^[a-f0-9]{8}$/i;
+const PROJECT_DIR_NAME = ".pi/projects";
+const PROJECT_PATH_ENV = "PI_PROJECT_PATH";
+const PROJECT_ID_PREFIX = "PROJECT-";
+const PROJECT_ID_PATTERN = /^[a-f0-9]{8}$/i;
 const DEFAULT_TODO_SETTINGS = {
 	gc: true,
 	gcDays: 7,
@@ -90,6 +99,7 @@ interface TodoFrontMatter {
 	status: string;
 	created_at: string;
 	assigned_to_session?: string;
+	project_id?: string;
 }
 
 interface TodoRecord extends TodoFrontMatter {
@@ -133,6 +143,7 @@ const TodoParams = Type.Object({
 		Type.Object({
 			tags: Type.Optional(Type.Array(Type.String(), { description: "Match todos having ALL of these tags" })),
 			status: Type.Optional(Type.String({ description: "Match todos with this status" })),
+			project_id: Type.Optional(Type.String({ description: "Match todos connected to this project" })),
 			untagged: Type.Optional(Type.Boolean({ description: "Match todos with no tags" })),
 		}, { description: "Filter to select todos for batch-update (combined with ids via union)" }),
 	),
@@ -148,6 +159,10 @@ const TodoParams = Type.Object({
 	body: Type.Optional(
 		Type.String({ description: "Long-form details (markdown). Update replaces; append adds." }),
 	),
+	project_id: Type.Optional(
+		Type.String({ description: "Project to connect (PROJECT-<hex> or raw hex id)" }),
+	),
+	clear_project: Type.Optional(Type.Boolean({ description: "Remove the todo's project connection" })),
 	force: Type.Optional(Type.Boolean({ description: "Override another session's assignment" })),
 });
 
@@ -218,6 +233,25 @@ function displayTodoId(id: string): string {
 	return formatTodoId(normalizeTodoId(id));
 }
 
+function normalizeProjectId(id: string): string {
+	let normalized = id.trim();
+	if (normalized.startsWith("#")) {
+		normalized = normalized.slice(1);
+	}
+	if (normalized.toUpperCase().startsWith(PROJECT_ID_PREFIX)) {
+		normalized = normalized.slice(PROJECT_ID_PREFIX.length);
+	}
+	return normalized.toLowerCase();
+}
+
+function isValidProjectId(id: string): boolean {
+	return PROJECT_ID_PATTERN.test(normalizeProjectId(id));
+}
+
+function formatProjectId(id: string): string {
+	return `${PROJECT_ID_PREFIX}${normalizeProjectId(id)}`;
+}
+
 function isTodoClosed(status: string): boolean {
 	return ["closed", "done"].includes(status.toLowerCase());
 }
@@ -243,7 +277,11 @@ function sortTodos(todos: TodoFrontMatter[]): TodoFrontMatter[] {
 function buildTodoSearchText(todo: TodoFrontMatter): string {
 	const tags = todo.tags.join(" ");
 	const assignment = todo.assigned_to_session ? `assigned:${todo.assigned_to_session}` : "";
-	return `${formatTodoId(todo.id)} ${todo.id} ${todo.title} ${tags} ${todo.status} ${assignment}`.trim();
+	let project = "";
+	if (todo.project_id) {
+		project = `${formatProjectId(todo.project_id)} project:${todo.project_id}`;
+	}
+	return `${formatTodoId(todo.id)} ${todo.id} ${todo.title} ${tags} ${todo.status} ${assignment} ${project}`.trim();
 }
 
 function filterTodos(todos: TodoFrontMatter[], query: string): TodoFrontMatter[] {
@@ -428,6 +466,10 @@ class TodoSelectorComponent extends Container implements Focusable {
 			const titleColor = isSelected ? "accent" : closed ? "dim" : "text";
 			const statusColor = closed ? "dim" : "success";
 			const tagText = todo.tags.length ? ` [${todo.tags.join(", ")}]` : "";
+			let projectText = "";
+			if (todo.project_id) {
+				projectText = ` (${formatProjectId(todo.project_id)})`;
+			}
 			const assignmentText = renderAssignmentSuffix(this.theme, todo, this.currentSessionId);
 			const line =
 				prefix +
@@ -435,6 +477,7 @@ class TodoSelectorComponent extends Container implements Focusable {
 				" " +
 				this.theme.fg(titleColor, todo.title || "(untitled)") +
 				this.theme.fg("muted", tagText) +
+				this.theme.fg("muted", projectText) +
 				assignmentText +
 				" " +
 				this.theme.fg(statusColor, `(${todo.status || "open"})`);
@@ -736,12 +779,18 @@ class TodoDetailOverlayComponent {
 		const status = this.todo.status || "open";
 		const statusColor = isTodoClosed(status) ? "dim" : "success";
 		const tagText = this.todo.tags.length ? this.todo.tags.join(", ") : "no tags";
+		let projectText = "no project";
+		if (this.todo.project_id) {
+			projectText = formatProjectId(this.todo.project_id);
+		}
 		const line =
 			this.theme.fg("accent", formatTodoId(this.todo.id)) +
 			this.theme.fg("muted", " • ") +
 			this.theme.fg(statusColor, status) +
 			this.theme.fg("muted", " • ") +
-			this.theme.fg("muted", tagText);
+			this.theme.fg("muted", tagText) +
+			this.theme.fg("muted", " • ") +
+			this.theme.fg("muted", projectText);
 		return truncateToWidth(line, width);
 	}
 
@@ -787,9 +836,35 @@ function getTodoSettingsPath(todosDir: string): string {
 	return path.join(todosDir, TODO_SETTINGS_NAME);
 }
 
+function getProjectsDir(cwd: string): string {
+	const overridePath = process.env[PROJECT_PATH_ENV];
+	if (overridePath && overridePath.trim()) {
+		return path.resolve(cwd, overridePath.trim());
+	}
+	return path.resolve(cwd, PROJECT_DIR_NAME);
+}
+
+// ASVS 2.2.1 and 2.2.3: project links use a strict id format and must reference an existing project.
+async function validateProjectConnection(cwd: string, rawId: string): Promise<{ id: string } | { error: string }> {
+	const id = normalizeProjectId(rawId);
+	if (!PROJECT_ID_PATTERN.test(id)) {
+		return { error: "Invalid project id. Expected PROJECT-<hex>." };
+	}
+	const projectPath = path.join(getProjectsDir(cwd), `${id}.md`);
+	try {
+		await fs.access(projectPath);
+	} catch {
+		return { error: `Project ${formatProjectId(id)} not found.` };
+	}
+	return { id };
+}
+
 function normalizeTodoSettings(raw: Partial<TodoSettings>): TodoSettings {
 	const gc = raw.gc ?? DEFAULT_TODO_SETTINGS.gc;
-	const gcDays = Number.isFinite(raw.gcDays) ? raw.gcDays : DEFAULT_TODO_SETTINGS.gcDays;
+	let gcDays = DEFAULT_TODO_SETTINGS.gcDays;
+	if (typeof raw.gcDays === "number" && Number.isFinite(raw.gcDays)) {
+		gcDays = raw.gcDays;
+	}
 	return {
 		gc: Boolean(gc),
 		gcDays: Math.max(0, Math.floor(gcDays)),
@@ -827,19 +902,25 @@ async function garbageCollectTodos(todosDir: string, settings: TodoSettings): Pr
 			.map(async (entry) => {
 				const id = entry.slice(0, -3);
 				const filePath = path.join(todosDir, entry);
-				try {
-					const content = await fs.readFile(filePath, "utf8");
-					const { frontMatter } = splitFrontMatter(content);
-					const parsed = parseFrontMatter(frontMatter, id);
-					if (!isTodoClosed(parsed.status)) return;
-					const createdAt = Date.parse(parsed.created_at);
-					if (!Number.isFinite(createdAt)) return;
-					if (createdAt < cutoff) {
-						await fs.unlink(filePath);
+				await withFileMutationQueue(filePath, async () => {
+					try {
+						const content = await fs.readFile(filePath, "utf8");
+						const { frontMatter } = splitFrontMatter(content);
+						const parsed = parseFrontMatter(frontMatter, id);
+						if (!isTodoClosed(parsed.status)) {
+							return;
+						}
+						const createdAt = Date.parse(parsed.created_at);
+						if (!Number.isFinite(createdAt)) {
+							return;
+						}
+						if (createdAt < cutoff) {
+							await fs.unlink(filePath);
+						}
+					} catch {
+						// ignore unreadable todo
 					}
-				} catch {
-					// ignore unreadable todo
-				}
+				});
 			}),
 	);
 }
@@ -860,6 +941,7 @@ function parseFrontMatter(text: string, idFallback: string): TodoFrontMatter {
 		status: "open",
 		created_at: "",
 		assigned_to_session: undefined,
+		project_id: undefined,
 	};
 
 	const trimmed = text.trim();
@@ -874,6 +956,9 @@ function parseFrontMatter(text: string, idFallback: string): TodoFrontMatter {
 		if (typeof parsed.created_at === "string") data.created_at = parsed.created_at;
 		if (typeof parsed.assigned_to_session === "string" && parsed.assigned_to_session.trim()) {
 			data.assigned_to_session = parsed.assigned_to_session;
+		}
+		if (typeof parsed.project_id === "string" && isValidProjectId(parsed.project_id)) {
+			data.project_id = normalizeProjectId(parsed.project_id);
 		}
 		if (Array.isArray(parsed.tags)) {
 			data.tags = parsed.tags.filter((tag): tag is string => typeof tag === "string");
@@ -952,6 +1037,7 @@ function parseTodoContent(content: string, idFallback: string): TodoRecord {
 		status: parsed.status,
 		created_at: parsed.created_at,
 		assigned_to_session: parsed.assigned_to_session,
+		project_id: parsed.project_id,
 		body: body ?? "",
 	};
 }
@@ -965,6 +1051,7 @@ function serializeTodo(todo: TodoRecord): string {
 			status: todo.status,
 			created_at: todo.created_at,
 			assigned_to_session: todo.assigned_to_session || undefined,
+			project_id: todo.project_id || undefined,
 		},
 		null,
 		2,
@@ -1068,13 +1155,19 @@ async function withTodoLock<T>(
 	ctx: ExtensionContext,
 	fn: () => Promise<T>,
 ): Promise<T | { error: string }> {
-	const lock = await acquireLock(todosDir, id, ctx);
-	if (typeof lock === "object" && "error" in lock) return lock;
-	try {
-		return await fn();
-	} finally {
-		await lock();
-	}
+	const todoPath = getTodoPath(todosDir, id);
+	// ASVS 15.4.1: Pi serializes same-process mutations; the lock file coordinates other processes.
+	return withFileMutationQueue(todoPath, async () => {
+		const lock = await acquireLock(todosDir, id, ctx);
+		if (typeof lock === "object" && "error" in lock) {
+			return lock;
+		}
+		try {
+			return await fn();
+		} finally {
+			await lock();
+		}
+	});
 }
 
 async function listTodos(todosDir: string): Promise<TodoFrontMatter[]> {
@@ -1101,6 +1194,7 @@ async function listTodos(todosDir: string): Promise<TodoFrontMatter[]> {
 				status: parsed.status,
 				created_at: parsed.created_at,
 				assigned_to_session: parsed.assigned_to_session,
+				project_id: parsed.project_id,
 			});
 		} catch {
 			// ignore unreadable todo
@@ -1134,6 +1228,7 @@ function listTodosSync(todosDir: string): TodoFrontMatter[] {
 				status: parsed.status,
 				created_at: parsed.created_at,
 				assigned_to_session: parsed.assigned_to_session,
+				project_id: parsed.project_id,
 			});
 		} catch {
 			// ignore
@@ -1169,7 +1264,11 @@ function renderAssignmentSuffix(
 
 function formatTodoHeading(todo: TodoFrontMatter): string {
 	const tagText = todo.tags.length ? ` [${todo.tags.join(", ")}]` : "";
-	return `${formatTodoId(todo.id)} ${getTodoTitle(todo)}${tagText}${formatAssignmentSuffix(todo)}`;
+	let projectText = "";
+	if (todo.project_id) {
+		projectText = ` (${formatProjectId(todo.project_id)})`;
+	}
+	return `${formatTodoId(todo.id)} ${getTodoTitle(todo)}${tagText}${projectText}${formatAssignmentSuffix(todo)}`;
 }
 
 function buildRefinePrompt(todoId: string, title: string): string {
@@ -1248,11 +1347,16 @@ function renderTodoHeading(theme: Theme, todo: TodoFrontMatter, currentSessionId
 	const titleColor = closed ? "dim" : "text";
 	const tagText = todo.tags.length ? theme.fg("dim", ` [${todo.tags.join(", ")}]`) : "";
 	const assignmentText = renderAssignmentSuffix(theme, todo, currentSessionId);
+	let projectText = "";
+	if (todo.project_id) {
+		projectText = theme.fg("muted", ` (${formatProjectId(todo.project_id)})`);
+	}
 	return (
 		theme.fg("accent", formatTodoId(todo.id)) +
 		" " +
 		theme.fg(titleColor, getTodoTitle(todo)) +
 		tagText +
+		projectText +
 		assignmentText
 	);
 }
@@ -1305,10 +1409,15 @@ function renderTodoDetail(theme: Theme, todo: TodoRecord, expanded: boolean): st
 	const bodyText = todo.body?.trim() ? todo.body.trim() : "No details yet.";
 	const bodyLines = bodyText.split("\n");
 
+	let projectText = "none";
+	if (todo.project_id) {
+		projectText = formatProjectId(todo.project_id);
+	}
 	const lines = [
 		summary,
 		theme.fg("muted", `Status: ${getTodoStatus(todo)}`),
 		theme.fg("muted", `Tags: ${tags}`),
+		theme.fg("muted", `Project: ${projectText}`),
 		theme.fg("muted", `Created: ${createdAt}`),
 		"",
 		theme.fg("muted", "Body:"),
@@ -1319,7 +1428,7 @@ function renderTodoDetail(theme: Theme, todo: TodoRecord, expanded: boolean): st
 }
 
 function appendExpandHint(theme: Theme, text: string): string {
-	return `${text}\n${theme.fg("dim", `(${keyHint("expandTools", "to expand")})`)}`;
+	return `${text}\n${theme.fg("dim", `(${keyHint("app.tools.expand", "to expand")})`)}`;
 }
 
 async function ensureTodoExists(filePath: string, id: string): Promise<TodoRecord | null> {
@@ -1504,9 +1613,10 @@ export default function todosExtension(pi: ExtensionAPI) {
 			`Manage file-based todos in ${todosDirLabel} (list, list-all, get, create, update, append, delete, claim, release, batch-update). ` +
 			"Title is the short summary; body is long-form markdown notes (update replaces, append adds). " +
 			"Todo ids are shown as TODO-<hex>; id parameters accept TODO-<hex> or the raw hex filename. " +
+			"Connect a todo to an existing project with project_id, or remove that connection with clear_project. " +
 			"Claim tasks before working on them to avoid conflicts. " +
 			"When you finish work on a task, set status to 'review' (not 'done') so the owner can review it. Only set status to 'done' if explicitly asked to. " +
-			"batch-update applies changes to multiple todos at once. Target todos by ids, filter (by tags/status/untagged), or both. " +
+			"batch-update applies changes to multiple todos at once. Target todos by ids, filter (by tags/status/project_id/untagged), or both. " +
 			"Use add_tags/remove_tags for incremental tag changes, or tags to replace all tags. " +
 			"Example: batch-update with filter {status: 'open'} and add_tags ['sprint-3'] tags all open todos.", 
 		parameters: TodoParams,
@@ -1575,6 +1685,17 @@ export default function todosExtension(pi: ExtensionAPI) {
 							details: { action: "create", error: "title required" },
 						};
 					}
+					let projectId: string | undefined;
+					if (params.project_id !== undefined) {
+						const connection = await validateProjectConnection(ctx.cwd, params.project_id);
+						if ("error" in connection) {
+							return {
+								content: [{ type: "text", text: connection.error }],
+								details: { action: "create", error: connection.error },
+							};
+						}
+						projectId = connection.id;
+					}
 					await ensureTodosDir(todosDir);
 					const id = await generateTodoId(todosDir);
 					const filePath = getTodoPath(todosDir, id);
@@ -1584,6 +1705,7 @@ export default function todosExtension(pi: ExtensionAPI) {
 						tags: params.tags ?? [],
 						status: params.status ?? "open",
 						created_at: new Date().toISOString(),
+						project_id: projectId,
 						body: params.body ?? "",
 					};
 
@@ -1619,6 +1741,23 @@ export default function todosExtension(pi: ExtensionAPI) {
 							details: { action: "update", error: validated.error },
 						};
 					}
+					if (params.project_id !== undefined && params.clear_project) {
+						return {
+							content: [{ type: "text", text: "Error: project_id and clear_project cannot be used together" }],
+							details: { action: "update", error: "conflicting project changes" },
+						};
+					}
+					let projectId: string | undefined;
+					if (params.project_id !== undefined) {
+						const connection = await validateProjectConnection(ctx.cwd, params.project_id);
+						if ("error" in connection) {
+							return {
+								content: [{ type: "text", text: connection.error }],
+								details: { action: "update", error: connection.error },
+							};
+						}
+						projectId = connection.id;
+					}
 					const normalizedId = validated.id;
 					const displayId = formatTodoId(normalizedId);
 					const filePath = getTodoPath(todosDir, normalizedId);
@@ -1637,6 +1776,8 @@ export default function todosExtension(pi: ExtensionAPI) {
 						if (params.status !== undefined) existing.status = params.status;
 						if (params.tags !== undefined) existing.tags = params.tags;
 						if (params.body !== undefined) existing.body = params.body;
+						if (projectId !== undefined) existing.project_id = projectId;
+						if (params.clear_project) existing.project_id = undefined;
 						if (!existing.created_at) existing.created_at = new Date().toISOString();
 						clearAssignmentIfClosed(existing);
 
@@ -1787,6 +1928,24 @@ export default function todosExtension(pi: ExtensionAPI) {
 				}
 
 				case "batch-update": {
+					if (params.project_id !== undefined && params.clear_project) {
+						return {
+							content: [{ type: "text", text: "Error: project_id and clear_project cannot be used together" }],
+							details: { action: "batch-update", updated: [], skipped: [], error: "conflicting project changes" },
+						};
+					}
+					let projectId: string | undefined;
+					if (params.project_id !== undefined) {
+						const connection = await validateProjectConnection(ctx.cwd, params.project_id);
+						if ("error" in connection) {
+							return {
+								content: [{ type: "text", text: connection.error }],
+								details: { action: "batch-update", updated: [], skipped: [], error: connection.error },
+							};
+						}
+						projectId = connection.id;
+					}
+
 					// Resolve target todos: explicit ids + filter matches (union)
 					const targetIds = new Set<string>();
 					const skipped: Array<{ id: string; reason: string }> = [];
@@ -1812,12 +1971,25 @@ export default function todosExtension(pi: ExtensionAPI) {
 					}
 
 					// Collect filter matches
-					const filter = params.filter as { tags?: string[]; status?: string; untagged?: boolean } | undefined;
+					const filter = params.filter as { tags?: string[]; status?: string; project_id?: string; untagged?: boolean } | undefined;
 					if (filter) {
+						if (filter.project_id && !isValidProjectId(filter.project_id)) {
+							return {
+								content: [{ type: "text", text: "Invalid project id. Expected PROJECT-<hex>." }],
+								details: { action: "batch-update", updated: [], skipped, error: "invalid project id" },
+							};
+						}
+						let filterProjectId: string | undefined;
+						if (filter.project_id) {
+							filterProjectId = normalizeProjectId(filter.project_id);
+						}
 						const allTodos = await listTodos(todosDir);
 						for (const todo of allTodos) {
 							let matches = true;
 							if (filter.status && todo.status.toLowerCase() !== filter.status.toLowerCase()) {
+								matches = false;
+							}
+							if (filterProjectId && todo.project_id !== filterProjectId) {
 								matches = false;
 							}
 							if (filter.tags && filter.tags.length > 0) {
@@ -1863,6 +2035,8 @@ export default function todosExtension(pi: ExtensionAPI) {
 							if (params.status !== undefined) existing.status = params.status;
 							if (params.title !== undefined) existing.title = params.title;
 							if (params.tags !== undefined) existing.tags = params.tags;
+							if (projectId !== undefined) existing.project_id = projectId;
+							if (params.clear_project) existing.project_id = undefined;
 
 							// Additive/subtractive tag operations
 							if (params.add_tags) {
@@ -1895,12 +2069,25 @@ export default function todosExtension(pi: ExtensionAPI) {
 								status: rec.status,
 								created_at: rec.created_at,
 								assigned_to_session: rec.assigned_to_session,
+								project_id: rec.project_id,
 							});
 						}
 					}
 
 					const summary = {
-						updated: updated.map(t => ({ id: formatTodoId(t.id), title: t.title, tags: t.tags, status: t.status })),
+						updated: updated.map(t => {
+							let projectId: string | undefined;
+							if (t.project_id) {
+								projectId = formatProjectId(t.project_id);
+							}
+							return {
+								id: formatTodoId(t.id),
+								title: t.title,
+								tags: t.tags,
+								status: t.status,
+								project_id: projectId,
+							};
+						}),
 						skipped: skipped.map(s => ({ id: formatTodoId(s.id), reason: s.reason })),
 					};
 					return {
@@ -1926,6 +2113,7 @@ export default function todosExtension(pi: ExtensionAPI) {
 				if (filter) {
 					const filterParts: string[] = [];
 					if (filter.status) filterParts.push(`status=${filter.status}`);
+					if (filter.project_id) filterParts.push(`project=${filter.project_id}`);
 					if (Array.isArray(filter.tags) && filter.tags.length) filterParts.push(`tags=[${filter.tags.join(",")}]`);
 					if (filter.untagged) filterParts.push("untagged");
 					if (filterParts.length) parts.push(filterParts.join(", "));
@@ -1937,6 +2125,8 @@ export default function todosExtension(pi: ExtensionAPI) {
 				if (addTags.length) changes.push(`+[${addTags.join(",")}]`);
 				if (removeTags.length) changes.push(`-[${removeTags.join(",")}]`);
 				if (typeof args.status === "string") changes.push(`status=${args.status}`);
+				if (typeof args.project_id === "string") changes.push(`project=${formatProjectId(args.project_id)}`);
+				if (args.clear_project) changes.push("project=none");
 				if (changes.length) text += " " + theme.fg("accent", changes.join(" "));
 			} else {
 				if (normalizedId) {
@@ -2314,9 +2504,18 @@ export default function todosExtension(pi: ExtensionAPI) {
 
 			if (nextPrompt) {
 				ctx.ui.setEditorText(nextPrompt);
-				rootTui?.requestRender();
+				if (rootTui) {
+					(rootTui as TUI).requestRender();
+				}
 			}
 		},
 	});
 
 }
+
+export const todoProjectTestApi = {
+	isValidProjectId,
+	normalizeProjectId,
+	parseTodoContent,
+	serializeTodo,
+};

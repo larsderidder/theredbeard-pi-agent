@@ -22,6 +22,7 @@ Personal pi coding agent package: extensions, skills, themes, and prompts.
 | `fork-terminal.ts` | `/fork-terminal`, `/clone-terminal`, `/btw`, and `clone-terminal` / `loop-terminal` tools for launching pi sessions in new terminals |
 | `move-session.ts` | `/move-session <directory>` — copy the current session history to another directory and switch to it |
 | `session-peers.ts` | `session_peers` tool and `/session-peers` command for checking recent activity in related pi sessions |
+| `projects.ts` | Persistent project manager with the `project` tool and `/project` or `/projects`; links todos and records contributing sessions |
 | `worktree.ts` | `/worktree <name> [branch]` — create a sibling git worktree and switch the agent workflow to it |
 
 ## Skills
