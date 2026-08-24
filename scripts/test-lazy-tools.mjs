@@ -20,6 +20,8 @@ const tools = [
 	{ name: "kubectl_exec", description: "Run kubectl" },
 	{ name: "loki_query_sbl-prod", description: "Query production Loki logs" },
 	{ name: "godot_screenshot", description: "Capture the Godot project" },
+	{ name: "screenshot", description: "Capture local tool output" },
+	{ name: "bryti_notify", description: "Notify after a model call" },
 ];
 
 assert.equal(lazyToolsTestApi.groupForTool("read"), undefined);
@@ -29,7 +31,7 @@ assert.equal(lazyToolsTestApi.groupForTool("outline_search"), "documents");
 assert.equal(lazyToolsTestApi.groupForTool("kubectl_exec"), "infrastructure");
 
 assert.deepEqual(
-	lazyToolsTestApi.findMatchingTools(tools, "browser automation", 10),
+	lazyToolsTestApi.findMatchingTools(tools, "browser automation", 1),
 	["browser_click", "browser_navigate"],
 );
 assert.deepEqual(
@@ -41,7 +43,19 @@ assert.deepEqual(
 	["gdrive_read", "search_browser", "search_gmail"],
 );
 assert.deepEqual(
+	lazyToolsTestApi.findMatchingTools(tools, "open URL", 10),
+	["argus_extract", "browser_navigate"],
+);
+assert.deepEqual(
 	lazyToolsTestApi.findMatchingTools(tools, "test driven development", 10),
+	[],
+);
+assert.deepEqual(
+	lazyToolsTestApi.findMatchingTools(
+		tools,
+		"Pi documentation or local files for RPC mode commands get active tools without model call",
+		50,
+	),
 	[],
 );
 assert.deepEqual(
@@ -85,8 +99,14 @@ assert.deepEqual(activeTools.sort(), ["read", "search_tools", "todo"]);
 
 const searchTools = registeredTools.get("search_tools");
 assert.ok(searchTools);
-const result = await searchTools.execute("test", { query: "browser automation", limit: 10 });
+const result = await searchTools.execute("test", { query: "browser automation", limit: 1 });
 assert.deepEqual(result.details.added, ["browser_click", "browser_navigate"]);
+assert.deepEqual(activeTools.sort(), ["browser_click", "browser_navigate", "read", "search_tools", "todo"]);
+
+const genericResult = await searchTools.execute("test", {
+	query: "Pi documentation or local files for RPC mode commands get active tools without model call",
+});
+assert.deepEqual(genericResult.details, { matches: [], added: [] });
 assert.deepEqual(activeTools.sort(), ["browser_click", "browser_navigate", "read", "search_tools", "todo"]);
 
 console.log("lazy tool tests passed");

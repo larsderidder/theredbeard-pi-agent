@@ -2,6 +2,48 @@ import type { ExtensionAPI, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 const SEARCH_TOOL_NAME = "search_tools";
+const DEFAULT_LEXICAL_LIMIT = 8;
+const MIN_LEXICAL_SCORE = 1;
+const LEXICAL_STOP_WORDS = new Set([
+	"a",
+	"active",
+	"an",
+	"and",
+	"by",
+	"call",
+	"calls",
+	"capability",
+	"command",
+	"commands",
+	"file",
+	"files",
+	"find",
+	"for",
+	"from",
+	"get",
+	"in",
+	"load",
+	"loaded",
+	"local",
+	"mode",
+	"model",
+	"my",
+	"of",
+	"on",
+	"or",
+	"our",
+	"pi",
+	"task",
+	"the",
+	"to",
+	"tool",
+	"tools",
+	"use",
+	"using",
+	"with",
+	"without",
+	"your",
+]);
 
 interface ToolGroup {
 	name: string;
@@ -111,6 +153,11 @@ function matchingGroupNames(query: string): Set<string> {
 	return matches;
 }
 
+function lexicalTerms(query: string): string[] {
+	const terms = normalizeSearchText(query).split(" ");
+	return [...new Set(terms)].filter((term) => term.length > 1 && !LEXICAL_STOP_WORDS.has(term));
+}
+
 function lexicalScore(tool: Pick<ToolInfo, "name" | "description">, terms: string[]): number {
 	const normalizedName = normalizeSearchText(tool.name);
 	const normalizedDescription = normalizeSearchText(tool.description);
@@ -137,14 +184,13 @@ function findMatchingTools(
 		return lazyTools
 			.filter((tool) => groupMatches.has(groupForTool(tool.name) ?? ""))
 			.map((tool) => tool.name)
-			.sort()
-			.slice(0, limit);
+			.sort();
 	}
 
-	const terms = normalizeSearchText(query).split(" ").filter(Boolean);
+	const terms = lexicalTerms(query);
 	return lazyTools
 		.map((tool) => ({ name: tool.name, score: lexicalScore(tool, terms) }))
-		.filter((tool) => tool.score > 0)
+		.filter((tool) => tool.score >= MIN_LEXICAL_SCORE)
 		.sort((left, right) => {
 			if (left.score !== right.score) {
 				return right.score - left.score;
@@ -179,10 +225,14 @@ export default function lazyToolsExtension(pi: ExtensionAPI): void {
 		// ASVS 2.2.1: bound model-controlled search input and result count.
 		parameters: Type.Object({
 			query: Type.String({ description: "Capability or task to search for", maxLength: 500 }),
-			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+			limit: Type.Optional(Type.Integer({
+				description: "Maximum lexical matches. Explicit domain bundles may contain more tools.",
+				minimum: 1,
+				maximum: 25,
+			})),
 		}),
 		async execute(_toolCallId, params) {
-			const matches = findMatchingTools(pi.getAllTools(), params.query, params.limit ?? 50);
+			const matches = findMatchingTools(pi.getAllTools(), params.query, params.limit ?? DEFAULT_LEXICAL_LIMIT);
 			if (matches.length === 0) {
 				return {
 					content: [{ type: "text", text: `No lazy tools found for: ${params.query}` }],
