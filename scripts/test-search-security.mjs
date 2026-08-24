@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -36,7 +36,15 @@ function run(command, args) {
 
 async function loadTools() {
   const dir = await mkdtemp(join(tmpdir(), "pi-search-security-"));
-  await symlink(join(repoRoot, "node_modules"), join(dir, "node_modules"), "dir");
+  const nodeModules = join(dir, "node_modules");
+  await mkdir(join(nodeModules, "@sinclair"), { recursive: true });
+  await mkdir(join(nodeModules, "@earendil-works"), { recursive: true });
+  await symlink(join(repoRoot, "node_modules", "typebox"), join(nodeModules, "@sinclair", "typebox"), "dir");
+  await symlink(
+    join(repoRoot, "node_modules", "@earendil-works", "pi-coding-agent"),
+    join(nodeModules, "@earendil-works", "pi-coding-agent"),
+    "dir",
+  );
   const outFile = join(dir, "search-extension.mjs");
   run("bun", [
     "build",

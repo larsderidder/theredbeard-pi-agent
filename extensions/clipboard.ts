@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 type ClipboardCommand = {
 	cmd: string;
@@ -205,11 +205,7 @@ export default function (pi: ExtensionAPI) {
 				};
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				return {
-					content: [{ type: "text", text: `Clipboard write failed: ${message}` }],
-					details: { error: message },
-					isError: true,
-				};
+				throw new Error(`Clipboard write failed: ${message}`);
 			}
 		},
 	});
@@ -253,7 +249,7 @@ export default function (pi: ExtensionAPI) {
 
 			try {
 				const command = writeClipboard(block.code);
-				ctx.ui.notify(`Copied code block ${block.index} (${block.code.length} chars) via ${command}.`, "success");
+				ctx.ui.notify(`Copied code block ${block.index} (${block.code.length} chars) via ${command}.`, "info");
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				ctx.ui.notify(`Clipboard write failed: ${message}`, "error");
@@ -271,7 +267,7 @@ export default function (pi: ExtensionAPI) {
 
 			try {
 				const command = writeClipboard(args);
-				ctx.ui.notify(`Copied ${args.length} characters to clipboard via ${command}.`, "success");
+				ctx.ui.notify(`Copied ${args.length} characters to clipboard via ${command}.`, "info");
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				ctx.ui.notify(`Clipboard write failed: ${message}`, "error");

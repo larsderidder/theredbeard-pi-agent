@@ -7,8 +7,8 @@
  * - Build scenes via the build_scenes.gd tool script
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { withFileMutationQueue, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { execSync, spawn } from "child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
@@ -77,10 +77,13 @@ export default function (pi: ExtensionAPI) {
 			const scriptsDir = join(PROJECT_DIR, "scripts");
 			const autoloadScript = join(scriptsDir, "_auto_screenshot.gd");
 
+			// ASVS 15.4.1: project.godot stays queued for the complete temporary modification window.
+			return withFileMutationQueue(projectFile, async () => {
 			// Validate project exists
 			if (!existsSync(projectFile)) {
 				return {
 					content: [{ type: "text", text: `project.godot not found at ${projectFile}. Is GODOT_PROJECT_DIR set correctly?` }],
+					details: {},
 					isError: true,
 				};
 			}
@@ -89,6 +92,7 @@ export default function (pi: ExtensionAPI) {
 			if (!existsSync(GODOT_BIN)) {
 				return {
 					content: [{ type: "text", text: `Godot binary not found at ${GODOT_BIN}.` }],
+					details: {},
 					isError: true,
 				};
 			}
@@ -139,6 +143,7 @@ func _process(_delta: float) -> void:
 
 			onUpdate?.({
 				content: [{ type: "text", text: `Launching Godot (waiting ${waitMs}ms / ${waitFrames} frames)...` }],
+				details: {},
 			});
 
 			let godotOutput = "";
@@ -176,6 +181,7 @@ func _process(_delta: float) -> void:
 								text: `Failed to capture screenshot.\n${errorLines ? "Errors:\n" + errorLines : "Godot output:\n" + godotOutput.slice(0, 2000)}`,
 							},
 						],
+						details: {},
 						isError: true,
 					};
 				}
@@ -188,6 +194,7 @@ func _process(_delta: float) -> void:
 			if (!existsSync(screenshotPath)) {
 				return {
 					content: [{ type: "text", text: "Screenshot file was not created. Godot may have crashed or the main scene failed to load." }],
+					details: {},
 					isError: true,
 				};
 			}
@@ -233,7 +240,9 @@ func _process(_delta: float) -> void:
 					{ type: "text", text: `Screenshot captured (${imgW}x${imgH}${imgW !== finalW ? ` resized to ${finalW}x${finalH} for API` : ""}, after ${waitFrames} frames)` },
 					{ type: "image", data: base64, mimeType: "image/png" },
 				],
+				details: {},
 			};
+			});
 		},
 	});
 
@@ -267,10 +276,12 @@ func _process(_delta: float) -> void:
 
 				return {
 					content: [{ type: "text", text: output }],
+					details: {},
 				};
 			} catch (err: any) {
 				return {
 					content: [{ type: "text", text: `Script failed:\n${err.stdout || err.stderr || err.message}` }],
+					details: {},
 					isError: true,
 				};
 			}
@@ -288,6 +299,7 @@ func _process(_delta: float) -> void:
 		async execute(_toolCallId, _params, signal, onUpdate, _ctx) {
 			onUpdate?.({
 				content: [{ type: "text", text: "Importing assets..." }],
+				details: {},
 			});
 
 			try {
@@ -299,6 +311,7 @@ func _process(_delta: float) -> void:
 
 				onUpdate?.({
 					content: [{ type: "text", text: "Building scenes..." }],
+					details: {},
 				});
 
 				// Build scenes
@@ -313,10 +326,12 @@ func _process(_delta: float) -> void:
 				const success = output.includes("SUCCESS");
 				return {
 					content: [{ type: "text", text: success ? "Scenes built successfully.\n" + output : "Build output:\n" + output }],
+					details: {},
 				};
 			} catch (err: any) {
 				return {
 					content: [{ type: "text", text: `Build failed:\n${err.stdout || err.stderr || err.message}` }],
+					details: {},
 					isError: true,
 				};
 			}
@@ -347,6 +362,7 @@ func _process(_delta: float) -> void:
 			const fps = params.fps ?? 30;
 			const outputVideo = join(PROJECT_DIR, "gameplay_video.mp4");
 
+			return withFileMutationQueue(outputVideo, async () => {
 			// Clean up previous video
 			if (existsSync(outputVideo)) {
 				try { unlinkSync(outputVideo); } catch { /* best effort */ }
@@ -366,6 +382,7 @@ func _process(_delta: float) -> void:
 
 			onUpdate?.({
 				content: [{ type: "text", text: `Recording ${duration}s at ${fps}fps...` }],
+				details: {},
 			});
 
 			let godotProcess: ReturnType<typeof spawn> | null = null;
@@ -427,6 +444,7 @@ func _process(_delta: float) -> void:
 				if (!existsSync(outputVideo)) {
 					return {
 						content: [{ type: "text", text: "Video recording failed: output file was not created." }],
+						details: {},
 						isError: true,
 					};
 				}
@@ -439,10 +457,12 @@ func _process(_delta: float) -> void:
 							text: `Video recorded: ${outputVideo} (${(stats.size / 1024 / 1024).toFixed(2)} MB, ${duration}s)`,
 						},
 					],
+					details: {},
 				};
 			} catch (err: any) {
 				return {
 					content: [{ type: "text", text: `Recording failed:\n${err.stdout || err.stderr || err.message}` }],
+					details: {},
 					isError: true,
 				};
 			} finally {
@@ -451,6 +471,7 @@ func _process(_delta: float) -> void:
 					godotProcess.kill();
 				}
 			}
+			});
 		},
 	});
 }

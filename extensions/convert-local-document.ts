@@ -17,7 +17,7 @@ import { existsSync, realpathSync, statSync } from "node:fs";
 import { basename, isAbsolute, sep } from "node:path";
 import { promisify } from "node:util";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 const execFileAsync = promisify(execFile);
 

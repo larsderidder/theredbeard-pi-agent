@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 type PeerScope = "repo" | "cwd" | "all";
 
@@ -453,7 +453,7 @@ function expandHome(value: string): string {
 }
 
 function formatPeerSessions(result: ReturnType<typeof pollPeerSessions>): string {
-  if ("error" in result) return result.error;
+  if ("error" in result && typeof result.error === "string") return result.error;
 
   const scopeLabel = result.scope === "repo" && result.repoRoot ? `repo ${result.repoRoot}` : `${result.scope} ${result.rootCwd}`;
   const lines = [

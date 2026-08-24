@@ -10,7 +10,7 @@
  * 4. Submits the compiled answers when done
  */
 
-import { complete, type Model, type Api, type UserMessage } from "@earendil-works/pi-ai";
+import { type Model, type Api, type UserMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { BorderedLoader } from "@earendil-works/pi-coding-agent";
 import {
@@ -73,32 +73,21 @@ const HAIKU_MODEL_ID = "claude-haiku-4-5";
 /**
  * Prefer Codex mini for extraction when available, otherwise fallback to haiku or the current model.
  */
-async function selectExtractionModel(
+function selectExtractionModel(
 	currentModel: Model<Api>,
-	modelRegistry: {
-		find: (provider: string, modelId: string) => Model<Api> | undefined;
-		getApiKey: (model: Model<Api>) => Promise<string | undefined>;
-	},
-): Promise<Model<Api>> {
+	modelRegistry: ExtensionContext["modelRegistry"],
+): Model<Api> {
 	const codexModel = modelRegistry.find("openai-codex", CODEX_MODEL_ID);
-	if (codexModel) {
-		const apiKey = await modelRegistry.getApiKey(codexModel);
-		if (apiKey) {
-			return codexModel;
-		}
+	if (codexModel && modelRegistry.hasConfiguredAuth(codexModel)) {
+		return codexModel;
 	}
 
 	const haikuModel = modelRegistry.find("anthropic", HAIKU_MODEL_ID);
-	if (!haikuModel) {
-		return currentModel;
+	if (haikuModel && modelRegistry.hasConfiguredAuth(haikuModel)) {
+		return haikuModel;
 	}
 
-	const apiKey = await modelRegistry.getApiKey(haikuModel);
-	if (!apiKey) {
-		return currentModel;
-	}
-
-	return haikuModel;
+	return currentModel;
 }
 
 /**
@@ -163,9 +152,11 @@ class QnAComponent implements Component {
 		const editorTheme: EditorTheme = {
 			borderColor: this.dim,
 			selectList: {
-				selectedBg: (s: string) => `\x1b[44m${s}\x1b[0m`,
-				matchHighlight: this.cyan,
-				itemSecondary: this.gray,
+				selectedPrefix: this.cyan,
+				selectedText: this.cyan,
+				description: this.gray,
+				scrollInfo: this.gray,
+				noMatch: this.yellow,
 			},
 		};
 
@@ -449,7 +440,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// Select the best model for extraction (prefer Codex mini, then haiku)
-			const extractionModel = await selectExtractionModel(ctx.model, ctx.modelRegistry);
+			const extractionModel = selectExtractionModel(ctx.model, ctx.modelRegistry);
 
 			// Run extraction with loader UI
 			const extractionResult = await ctx.ui.custom<ExtractionResult | null>((tui, theme, _kb, done) => {
@@ -457,17 +448,16 @@ export default function (pi: ExtensionAPI) {
 				loader.onAbort = () => done(null);
 
 				const doExtract = async () => {
-					const apiKey = await ctx.modelRegistry.getApiKey(extractionModel);
 					const userMessage: UserMessage = {
 						role: "user",
 						content: [{ type: "text", text: lastAssistantText! }],
 						timestamp: Date.now(),
 					};
 
-					const response = await complete(
+					const response = await ctx.modelRegistry.complete(
 						extractionModel,
 						{ systemPrompt: SYSTEM_PROMPT, messages: [userMessage] },
-						{ apiKey, signal: loader.signal },
+						{ signal: loader.signal },
 					);
 
 					if (response.stopReason === "aborted") {

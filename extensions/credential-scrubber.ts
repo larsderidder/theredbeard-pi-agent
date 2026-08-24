@@ -6,8 +6,8 @@
  * with the user, then rewrites the session file replacing all occurrences with [REDACTED].
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { withFileMutationQueue, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { readFileSync, writeFileSync } from "node:fs";
 
 const SCRUB_INSTRUCTIONS = `
@@ -65,48 +65,51 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
-			let raw: string;
-			try {
-				raw = readFileSync(sessionFile, "utf8");
-			} catch (err: any) {
+			// ASVS 15.4.1: keep the session read and replacement write in one mutation window.
+			return withFileMutationQueue(sessionFile, async () => {
+				let raw: string;
+				try {
+					raw = readFileSync(sessionFile, "utf8");
+				} catch (err: any) {
+					return {
+						content: [{ type: "text", text: `Failed to read session file: ${err.message}` }],
+						details: { scrubbed: false, reason: "read error", error: err.message },
+					};
+				}
+
+				// Count occurrences before replacing
+				const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+				const regex = new RegExp(escaped, "g");
+				const matches = (raw.match(regex) ?? []).length;
+
+				if (matches === 0) {
+					return {
+						content: [{ type: "text", text: "Value not found in session file. Nothing was changed." }],
+						details: { scrubbed: false, reason: "not found" },
+					};
+				}
+
+				const scrubbed = raw.replace(regex, "[REDACTED]");
+
+				try {
+					writeFileSync(sessionFile, scrubbed, "utf8");
+				} catch (err: any) {
+					return {
+						content: [{ type: "text", text: `Failed to write session file: ${err.message}` }],
+						details: { scrubbed: false, reason: "write error", error: err.message },
+					};
+				}
+
 				return {
-					content: [{ type: "text", text: `Failed to read session file: ${err.message}` }],
-					details: { scrubbed: false, reason: "read error", error: err.message },
+					content: [
+						{
+							type: "text",
+							text: `Done. Replaced ${matches} occurrence${matches === 1 ? "" : "s"} of the credential with [REDACTED] in the session file.`,
+						},
+					],
+					details: { scrubbed: true, occurrences: matches },
 				};
-			}
-
-			// Count occurrences before replacing
-			const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-			const regex = new RegExp(escaped, "g");
-			const matches = (raw.match(regex) ?? []).length;
-
-			if (matches === 0) {
-				return {
-					content: [{ type: "text", text: "Value not found in session file. Nothing was changed." }],
-					details: { scrubbed: false, reason: "not found" },
-				};
-			}
-
-			const scrubbed = raw.replace(regex, "[REDACTED]");
-
-			try {
-				writeFileSync(sessionFile, scrubbed, "utf8");
-			} catch (err: any) {
-				return {
-					content: [{ type: "text", text: `Failed to write session file: ${err.message}` }],
-					details: { scrubbed: false, reason: "write error", error: err.message },
-				};
-			}
-
-			return {
-				content: [
-					{
-						type: "text",
-						text: `Done. Replaced ${matches} occurrence${matches === 1 ? "" : "s"} of the credential with [REDACTED] in the session file.`,
-					},
-				],
-				details: { scrubbed: true, occurrences: matches },
-			};
+			});
 		},
 	});
 }

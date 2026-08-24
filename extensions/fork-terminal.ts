@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 function commandExists(command: string): boolean {
 	if (command.includes("/")) return existsSync(command);
@@ -336,7 +336,7 @@ export default function forkTerminalExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("btw", {
-		description: "Clone from the last assistant message in a new terminal and optionally submit a prompt",
+		description: "Clone the current state, or the state before the active turn, in a new terminal",
 		handler: async (args, ctx) => {
 			let prompt: string | undefined;
 			try {
@@ -346,7 +346,11 @@ export default function forkTerminalExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			const leafId = findAssistantBeforeLastUserMessageId(ctx);
+			let leafId = ctx.sessionManager.getLeafId() ?? null;
+			if (!ctx.isIdle()) {
+				leafId = findAssistantBeforeLastUserMessageId(ctx);
+			}
+
 			const sessionName = prompt ? `btw: ${oneLine(prompt).slice(0, 80)}` : undefined;
 			const terminal = launchFork(ctx, leafId, prompt, sessionName);
 			const message = prompt

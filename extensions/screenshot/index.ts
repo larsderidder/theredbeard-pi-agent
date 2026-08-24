@@ -7,8 +7,8 @@
  * Install globally: ~/.pi/agent/extensions/screenshot/
  */
 
-import { Type } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { withFileMutationQueue, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import puppeteer from "puppeteer";
 import sharp from "sharp";
 import * as path from "node:path";
@@ -72,6 +72,8 @@ export default function (pi: ExtensionAPI) {
 				? outputPath
 				: path.resolve(ctx.cwd, outputPath);
 
+			// ASVS 15.4.1: screenshot creation owns the output path until the browser closes.
+			return withFileMutationQueue(resolvedPath, async () => {
 			const dir = path.dirname(resolvedPath);
 			if (!fs.existsSync(dir)) {
 				fs.mkdirSync(dir, { recursive: true });
@@ -156,21 +158,13 @@ export default function (pi: ExtensionAPI) {
 					details: { path: resolvedPath, width: imgW, height: imgH, fullPage },
 				};
 			} catch (error: any) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: `Screenshot failed: ${error.message}`,
-						},
-					],
-					details: { error: error.message },
-					isError: true,
-				};
+				throw new Error(`Screenshot failed: ${error.message}`);
 			} finally {
 				if (browser) {
 					await browser.close();
 				}
 			}
+			});
 		},
 	});
 }

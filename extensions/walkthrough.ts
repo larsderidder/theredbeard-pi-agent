@@ -10,7 +10,7 @@
  *   /walkthrough src/     - limit to a path
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 
 // ---------------------------------------------------------------------------
@@ -127,11 +127,11 @@ function explainPrompt(step: Step): string {
 
 type NavChoice = "next" | "prev" | "explain" | "quit";
 
-async function askNav(step: Step, ui: any): Promise<NavChoice> {
+async function askNav(step: Step, ui: ExtensionContext["ui"]): Promise<NavChoice> {
 	const isLast = step.stepIndex === step.totalSteps - 1;
 
 	return new Promise<NavChoice>((resolve) => {
-		ui.custom<NavChoice>((tui: any, theme: any, _kb: any, done: (v: NavChoice) => void) => {
+		ui.custom<NavChoice>((tui, theme, _kb, done) => {
 			let cachedLines: string[] | undefined;
 
 			function render(width: number): string[] {
@@ -271,7 +271,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (i >= steps.length) {
-				ctx.ui.notify("Walkthrough complete.", "success");
+				ctx.ui.notify("Walkthrough complete.", "info");
 			}
 		},
 	});

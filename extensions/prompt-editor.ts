@@ -1,5 +1,6 @@
-import type { ExtensionAPI, ExtensionContext, ModelSelectEvent, ThinkingLevel } from "@earendil-works/pi-coding-agent";
-import { CustomEditor, ModelSelectorComponent, SettingsManager } from "@earendil-works/pi-coding-agent";
+import type { ModelThinkingLevel as ThinkingLevel } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { CustomEditor, ModelSelectorComponent, SettingsManager, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs/promises";
@@ -85,7 +86,7 @@ function getLockPathForFile(filePath: string): string {
 	return `${filePath}.lock`;
 }
 
-async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+async function withCrossProcessFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
 	const lockPath = getLockPathForFile(filePath);
 	await ensureDirForFile(lockPath);
 
@@ -130,6 +131,11 @@ async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<
 			await sleep(40 + Math.random() * 80);
 		}
 	}
+}
+
+async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+	// ASVS 15.4.1: combine Pi's same-process queue with the existing cross-process lock.
+	return withFileMutationQueue(filePath, async () => withCrossProcessFileLock(filePath, fn));
 }
 
 async function atomicWriteUtf8(filePath: string, content: string): Promise<void> {
@@ -246,7 +252,7 @@ function normalizeThinkingLevel(level: unknown): ThinkingLevel | undefined {
 	if (typeof level !== "string") return undefined;
 	const v = level as ThinkingLevel;
 	// Keep the list local to avoid importing internal enums.
-	const allowed: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+	const allowed: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 	return allowed.includes(v) ? v : undefined;
 }
 
@@ -610,7 +616,7 @@ const MODE_UI_CONFIGURE = "Configure modes…";
 const MODE_UI_ADD = "Add mode…";
 const MODE_UI_BACK = "Back";
 
-const ALL_THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+const ALL_THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const THINKING_UNSET_LABEL = "(don't change)";
 
 function isDefaultModeName(name: string): boolean {
@@ -1211,7 +1217,7 @@ export default function (pi: ExtensionAPI) {
 			if (tokens[0] === "store") {
 				await ensureRuntime(pi, ctx);
 
-				let target = tokens[1];
+				let target: string | undefined = tokens[1];
 				if (!target) {
 					if (!ctx.hasUI) return;
 					const names = orderedModeNames(runtime.data.modes);
@@ -1267,25 +1273,7 @@ export default function (pi: ExtensionAPI) {
 		applyEditor(pi, ctx);
 	});
 
-	pi.on("session_switch", async (_event, ctx) => {
-		lastObservedModel = { provider: ctx.model?.provider, modelId: ctx.model?.id };
-		await ensureRuntime(pi, ctx);
-		customOverlay = null;
-
-		const inferred = inferModeFromSelection(ctx, pi, runtime.data);
-		if (inferred) {
-			runtime.currentMode = inferred;
-			runtime.lastRealMode = inferred;
-		} else {
-			runtime.currentMode = CUSTOM_MODE_NAME;
-			customOverlay = getCurrentSelectionSpec(pi, ctx);
-		}
-
-		applyEditor(pi, ctx);
-	});
-
-
-	pi.on("model_select", async (event: ModelSelectEvent, ctx) => {
+	pi.on("model_select", async (event, ctx) => {
 		// Always track the last observed model for overlay/store correctness.
 		lastObservedModel = { provider: event.model.provider, modelId: event.model.id };
 

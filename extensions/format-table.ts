@@ -13,7 +13,7 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { withFileMutationQueue, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 type Alignment = "left" | "right";
 
@@ -199,7 +199,7 @@ export default function (pi: ExtensionAPI) {
 		handler: async (args, ctx: ExtensionCommandContext) => {
 			const parts = args.trim().split(/\s+/);
 			if (parts.length === 0 || !parts[0]) {
-				ctx.reply("Usage: /format-table <path> [line]\n\nFormats all tables in the file, or the table containing the given line number.");
+				ctx.ui.notify("Usage: /format-table <path> [line]", "warning");
 				return;
 			}
 
@@ -208,41 +208,45 @@ export default function (pi: ExtensionAPI) {
 				: path.resolve(ctx.cwd, parts[0]);
 			const lineArg = parts[1] ? parseInt(parts[1], 10) : undefined;
 
-			let content: string;
-			try {
-				content = readFileSync(filePath, "utf-8");
-			} catch (e) {
-				ctx.reply(`Could not read file: ${filePath}`);
-				return;
-			}
-
-			const lines = content.split("\n");
-
-			if (lineArg !== undefined) {
-				// Format the table containing this line (1-indexed)
-				const idx = lineArg - 1;
-				if (idx < 0 || idx >= lines.length) {
-					ctx.reply(`Line ${lineArg} is out of range (file has ${lines.length} lines).`);
+			// ASVS 15.4.1: table detection and replacement share one file mutation window.
+			await withFileMutationQueue(filePath, async () => {
+				let content: string;
+				try {
+					content = readFileSync(filePath, "utf-8");
+				} catch (e) {
+					ctx.ui.notify(`Could not read file: ${filePath}`, "error");
 					return;
 				}
 
-				const bounds = findTableBounds(lines, idx);
-				if (!bounds) {
-					ctx.reply(`No markdown table found at line ${lineArg}.`);
+				const lines = content.split("\n");
+
+				if (lineArg !== undefined) {
+					// Format the table containing this line (1-indexed)
+					const idx = lineArg - 1;
+					if (idx < 0 || idx >= lines.length) {
+						ctx.ui.notify(`Line ${lineArg} is out of range (file has ${lines.length} lines).`, "warning");
+						return;
+					}
+
+					const bounds = findTableBounds(lines, idx);
+					if (!bounds) {
+						ctx.ui.notify(`No markdown table found at line ${lineArg}.`, "warning");
+						return;
+					}
+
+					const tableLines = lines.slice(bounds.start, bounds.end + 1);
+					const formatted = formatTable(tableLines);
+					lines.splice(bounds.start, bounds.end - bounds.start + 1, ...formatted);
+					writeFileSync(filePath, lines.join("\n"), "utf-8");
+
+					ctx.ui.notify(`Formatted table at lines ${bounds.start + 1}-${bounds.end + 1} in ${path.basename(filePath)}.`, "info");
 					return;
 				}
 
-				const tableLines = lines.slice(bounds.start, bounds.end + 1);
-				const formatted = formatTable(tableLines);
-				lines.splice(bounds.start, bounds.end - bounds.start + 1, ...formatted);
-				writeFileSync(filePath, lines.join("\n"), "utf-8");
-
-				ctx.reply(`Formatted table at lines ${bounds.start + 1}-${bounds.end + 1} in ${path.basename(filePath)}.`);
-			} else {
 				// Format all tables in the file
 				const tables = findAllTables(lines);
 				if (tables.length === 0) {
-					ctx.reply(`No markdown tables found in ${path.basename(filePath)}.`);
+					ctx.ui.notify(`No markdown tables found in ${path.basename(filePath)}.`, "info");
 					return;
 				}
 
@@ -255,8 +259,8 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				writeFileSync(filePath, lines.join("\n"), "utf-8");
-				ctx.reply(`Formatted ${tables.length} table${tables.length > 1 ? "s" : ""} in ${path.basename(filePath)}.`);
-			}
+				ctx.ui.notify(`Formatted ${tables.length} table${tables.length > 1 ? "s" : ""} in ${path.basename(filePath)}.`, "info");
+			});
 		},
 	});
 }

@@ -31,8 +31,8 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { DynamicBorder, getMarkdownTheme, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Container, Markdown, Text, matchesKey } from "@earendil-works/pi-tui";
 import fs from "node:fs/promises";
@@ -132,11 +132,16 @@ function deduplicate(content: string): { cleaned: string; removed: number } {
 // ---------------------------------------------------------------------------
 
 async function appendFact(filePath: string, fact: string): Promise<void> {
-	await ensureDir(filePath);
-	let content = await readMemory(filePath);
-	if (!content.endsWith("\n") && content.length > 0) content += "\n";
-	content += `- ${fact}\n`;
-	await writeMemory(filePath, content);
+	// ASVS 15.4.1: queue the complete read-modify-write window for this memory file.
+	await withFileMutationQueue(filePath, async () => {
+		await ensureDir(filePath);
+		let content = await readMemory(filePath);
+		if (!content.endsWith("\n") && content.length > 0) {
+			content += "\n";
+		}
+		content += `- ${fact}\n`;
+		await writeMemory(filePath, content);
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -144,11 +149,17 @@ async function appendFact(filePath: string, fact: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function selfClean(filePath: string): Promise<number> {
-	if (!existsSync(filePath)) return 0;
-	const content = await readMemory(filePath);
-	const { cleaned, removed } = deduplicate(content);
-	if (removed > 0) await writeMemory(filePath, cleaned);
-	return removed;
+	return withFileMutationQueue(filePath, async () => {
+		if (!existsSync(filePath)) {
+			return 0;
+		}
+		const content = await readMemory(filePath);
+		const { cleaned, removed } = deduplicate(content);
+		if (removed > 0) {
+			await writeMemory(filePath, cleaned);
+		}
+		return removed;
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -268,15 +279,17 @@ async function runForgetFlow(
 	if (!confirmed) return;
 
 	const keyToRemove = normalizeBullet(chosen);
-	const newLines = content.split("\n").filter((line) => {
-		if (/^\s*-\s+/.test(line)) {
-			return normalizeBullet(line) !== keyToRemove;
-		}
-		return true;
+	await withFileMutationQueue(filePath, async () => {
+		const latestContent = await readMemory(filePath);
+		const newLines = latestContent.split("\n").filter((line) => {
+			if (/^\s*-\s+/.test(line)) {
+				return normalizeBullet(line) !== keyToRemove;
+			}
+			return true;
+		});
+		await writeMemory(filePath, newLines.join("\n"));
 	});
-
-	await writeMemory(filePath, newLines.join("\n"));
-	ctx.ui.notify("Entry removed.", "success");
+	ctx.ui.notify("Entry removed.", "info");
 }
 
 // ---------------------------------------------------------------------------
@@ -388,3 +401,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
 		},
 	});
 }
+
+export const memoryTestApi = {
+	appendFact,
+};

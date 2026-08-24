@@ -16,7 +16,6 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
-import { complete } from "@earendil-works/pi-ai";
 
 const CUSTOM_TYPE = "session-purpose";
 const STATUS_KEY = "session-purpose";
@@ -59,11 +58,6 @@ export default function sessionPurposeExtension(pi: ExtensionAPI) {
 		applyPurpose(readPurposeFromEntries(ctx), ctx);
 	});
 
-	// Restore after /fork (new file, same history).
-	pi.on("session_fork", async (_event, ctx) => {
-		applyPurpose(readPurposeFromEntries(ctx), ctx);
-	});
-
 	// Inject purpose into the system prompt so the model stays aware of it.
 	pi.on("before_agent_start", async (event, _ctx) => {
 		if (!currentPurpose) return;
@@ -96,9 +90,8 @@ export default function sessionPurposeExtension(pi: ExtensionAPI) {
 			return;
 		}
 
-		const apiKey = await ctx.modelRegistry.getApiKey(model);
-		if (!apiKey) {
-			ctx.ui.notify("session-purpose: no API key, falling back to default compaction", "warning");
+		if (!ctx.modelRegistry.hasConfiguredAuth(model)) {
+			ctx.ui.notify("session-purpose: no model authentication, falling back to default compaction", "warning");
 			return;
 		}
 
@@ -125,7 +118,7 @@ export default function sessionPurposeExtension(pi: ExtensionAPI) {
 			`\n\n<conversation>\n${conversationText}\n</conversation>`;
 
 		try {
-			const response = await complete(
+			const response = await ctx.modelRegistry.complete(
 				model,
 				{
 					messages: [
@@ -136,7 +129,7 @@ export default function sessionPurposeExtension(pi: ExtensionAPI) {
 						},
 					],
 				},
-				{ apiKey, maxTokens: 8192, signal: event.signal },
+				{ maxTokens: 8192, signal: event.signal },
 			);
 
 			const summary = response.content
@@ -156,6 +149,7 @@ export default function sessionPurposeExtension(pi: ExtensionAPI) {
 					summary,
 					firstKeptEntryId: preparation.firstKeptEntryId,
 					tokensBefore: preparation.tokensBefore,
+					usage: response.usage,
 				},
 			};
 		} catch (err) {

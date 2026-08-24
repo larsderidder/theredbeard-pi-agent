@@ -126,7 +126,7 @@ export default function worktreeExtension(pi: ExtensionAPI) {
         return;
       }
 
-      ctx.ui.notify(`Worktree ready: ${worktreePath}`, "success");
+      ctx.ui.notify(`Worktree ready: ${worktreePath}`, "info");
 
       // Inject a message so the LLM knows the cwd has changed
       pi.sendMessage(

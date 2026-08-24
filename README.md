@@ -40,6 +40,8 @@ Personal pi coding agent package: extensions, skills, themes, and prompts.
 ## Tests
 
 ```bash
+npm test
+npm run typecheck
 npm run test:search-security
 npm run test:search-security:live
 ```

@@ -18,11 +18,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import {
 	Container,
 	fuzzyFilter,
-	getEditorKeybindings,
 	Input,
 	type SelectItem,
 	SelectList,
@@ -156,7 +155,7 @@ const extractFileReferencesFromContent = (content: unknown): string[] => {
 };
 
 const extractFileReferencesFromEntry = (entry: SessionEntry): string[] => {
-	if (entry.type === "message") {
+	if (entry.type === "message" && "content" in entry.message) {
 		return extractFileReferencesFromContent(entry.message.content);
 	}
 
@@ -706,34 +705,43 @@ const openExternalEditor = (tui: TUI, editorCmd: string, content: string): strin
 	}
 };
 
-const editPath = async (ctx: ExtensionContext, target: FileEntry, content: string): Promise<void> => {
+const editPath = async (ctx: ExtensionContext, target: FileEntry): Promise<void> => {
 	const editorCmd = process.env.VISUAL || process.env.EDITOR;
 	if (!editorCmd) {
 		ctx.ui.notify("No editor configured. Set $VISUAL or $EDITOR.", "warning");
 		return;
 	}
 
-	const updated = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
-		const status = new Text(theme.fg("dim", `Opening ${editorCmd}...`));
+	// ASVS 15.4.1: read, edit, and write the selected file under one mutation queue entry.
+	await withFileMutationQueue(target.resolvedPath, async () => {
+		const editCheck = getEditableContent(target);
+		if (!editCheck.allowed || editCheck.content === undefined) {
+			ctx.ui.notify(editCheck.reason ?? "File cannot be edited", "warning");
+			return;
+		}
 
-		queueMicrotask(() => {
-			const result = openExternalEditor(tui, editorCmd, content);
-			done(result);
+		const updated = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+			const status = new Text(theme.fg("dim", `Opening ${editorCmd}...`));
+
+			queueMicrotask(() => {
+				const result = openExternalEditor(tui, editorCmd, editCheck.content ?? "");
+				done(result);
+			});
+
+			return status;
 		});
 
-		return status;
+		if (updated === null) {
+			ctx.ui.notify("Edit cancelled", "info");
+			return;
+		}
+
+		try {
+			writeFileSync(target.resolvedPath, updated, "utf8");
+		} catch {
+			ctx.ui.notify(`Failed to save ${target.displayPath}`, "error");
+		}
 	});
-
-	if (updated === null) {
-		ctx.ui.notify("Edit cancelled", "info");
-		return;
-	}
-
-	try {
-		writeFileSync(target.resolvedPath, updated, "utf8");
-	} catch {
-		ctx.ui.notify(`Failed to save ${target.displayPath}`, "error");
-	}
 };
 
 const addFileToPrompt = (ctx: ExtensionContext, target: FileEntry): void => {
@@ -759,7 +767,7 @@ const showFileSelector = async (
 		};
 	});
 
-	const selection = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+	const selection = await ctx.ui.custom<string | null>((tui, theme, keybindings, done) => {
 		const container = new Container();
 		container.addChild(new DynamicBorder((str) => theme.fg("accent", str)));
 		container.addChild(new Text(theme.fg("accent", theme.bold(" Select file")), 0, 0));
@@ -825,16 +833,15 @@ const showFileSelector = async (
 				container.invalidate();
 			},
 			handleInput(data: string) {
-				const kb = getEditorKeybindings();
 				if (
-					kb.matches(data, "selectUp") ||
-					kb.matches(data, "selectDown") ||
-					kb.matches(data, "selectConfirm") ||
-					kb.matches(data, "selectCancel")
+					keybindings.matches(data, "tui.select.up") ||
+					keybindings.matches(data, "tui.select.down") ||
+					keybindings.matches(data, "tui.select.confirm") ||
+					keybindings.matches(data, "tui.select.cancel")
 				) {
 					if (selectList) {
 						selectList.handleInput(data);
-					} else if (kb.matches(data, "selectCancel")) {
+					} else if (keybindings.matches(data, "tui.select.cancel")) {
 						done(null);
 					}
 					tui.requestRender();
@@ -891,7 +898,7 @@ const runFileBrowser = async (pi: ExtensionAPI, ctx: ExtensionContext): Promise<
 					ctx.ui.notify(editCheck.reason ?? "File cannot be edited", "warning");
 					break;
 				}
-				await editPath(ctx, selected, editCheck.content);
+				await editPath(ctx, selected);
 				break;
 			case "addToPrompt":
 				addFileToPrompt(ctx, selected);

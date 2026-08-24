@@ -22,9 +22,9 @@ import { readFileSync, existsSync, writeFileSync, unlinkSync, mkdtempSync, rmdir
 import { basename, resolve, dirname, join } from "path";
 import { tmpdir } from "os";
 import { spawn, execFileSync } from "child_process";
-import { Type } from "@sinclair/typebox";
-import { complete, type Api, type Model, type UserMessage } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext, SessionSwitchEvent } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { type Api, type Model, type UserMessage } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { compact } from "@earendil-works/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
@@ -412,27 +412,22 @@ function getConditionText(mode: LoopMode, condition?: string): string {
 // Summary model helpers
 // ---------------------------------------------------------------------------
 
-async function selectSummaryModel(
-	ctx: ExtensionContext,
-): Promise<{ model: Model<Api>; apiKey: string } | null> {
-	if (!ctx.model) return null;
-
-	const getKey = async (model: Model<Api>): Promise<string | null> => {
-		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-		return auth.ok && auth.apiKey ? auth.apiKey : null;
-	};
+function selectSummaryModel(ctx: ExtensionContext): Model<Api> | null {
+	if (!ctx.model) {
+		return null;
+	}
 
 	if (ctx.model.provider === "anthropic") {
 		const haikuModel = ctx.modelRegistry.find("anthropic", HAIKU_MODEL_ID);
-		if (haikuModel) {
-			const apiKey = await getKey(haikuModel);
-			if (apiKey) return { model: haikuModel, apiKey };
+		if (haikuModel && ctx.modelRegistry.hasConfiguredAuth(haikuModel)) {
+			return haikuModel;
 		}
 	}
 
-	const apiKey = await getKey(ctx.model);
-	if (!apiKey) return null;
-	return { model: ctx.model, apiKey };
+	if (!ctx.modelRegistry.hasConfiguredAuth(ctx.model)) {
+		return null;
+	}
+	return ctx.model;
 }
 
 async function summarizeBreakoutCondition(
@@ -441,8 +436,8 @@ async function summarizeBreakoutCondition(
 	condition?: string,
 ): Promise<string> {
 	const fallback = summarizeCondition(mode, condition);
-	const selection = await selectSummaryModel(ctx);
-	if (!selection) return fallback;
+	const model = selectSummaryModel(ctx);
+	if (!model) return fallback;
 
 	const conditionText = getConditionText(mode, condition);
 	const userMessage: UserMessage = {
@@ -451,10 +446,9 @@ async function summarizeBreakoutCondition(
 		timestamp: Date.now(),
 	};
 
-	const response = await complete(
-		selection.model,
+	const response = await ctx.modelRegistry.complete(
+		model,
 		{ systemPrompt: SUMMARY_SYSTEM_PROMPT, messages: [userMessage] },
-		{ apiKey: selection.apiKey },
 	);
 
 	if (response.stopReason === "aborted" || response.stopReason === "error") {
@@ -706,6 +700,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
 		if (ctx.hasPendingMessages()) return;
 		if (loopState.subagent) return; // subagent mode uses runSubagentLoop
 
+		const prompt = loopState.prompt;
 		const loopCount = (loopState.loopCount ?? 0) + 1;
 		loopState = { ...loopState, loopCount };
 		persistState(loopState);
@@ -713,7 +708,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
 		pi.sendMessage({
 			customType: "loop",
-			content: loopState.prompt,
+			content: prompt,
 			display: true,
 		}, { deliverAs: "followUp", triggerTurn: true });
 	}
@@ -1310,12 +1305,24 @@ export default function loopExtension(pi: ExtensionAPI): void {
 	pi.on("session_before_compact", async (event, ctx) => {
 		if (!loopState.active || !loopState.mode || !ctx.model) return;
 		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
-		if (!auth.ok || !auth.apiKey) return;
-		const apiKey = auth.apiKey;
+		if (!auth.ok) return;
+		const headers = Object.fromEntries(
+			Object.entries(auth.headers ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+		);
 		const instructionParts = [event.customInstructions, getCompactionInstructions(loopState.mode, loopState.condition)]
 			.filter(Boolean).join("\n\n");
 		try {
-			const compaction = await compact(event.preparation, ctx.model, apiKey, instructionParts, event.signal);
+			const compaction = await compact(
+				event.preparation,
+				ctx.model,
+				auth.apiKey,
+				headers,
+				instructionParts,
+				event.signal,
+				ctx.thinkingLevel,
+				undefined,
+				auth.env,
+			);
 			return { compaction };
 		} catch (error) {
 			if (ctx.hasUI) ctx.ui.notify(`Loop compaction failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
@@ -1337,8 +1344,9 @@ export default function loopExtension(pi: ExtensionAPI): void {
 		}
 	}
 
-	pi.on("session_start",  async (_event, ctx) => { await restoreLoopState(ctx); });
-	pi.on("session_switch", async (_event: SessionSwitchEvent, ctx) => { await restoreLoopState(ctx); });
+	pi.on("session_start", async (_event, ctx) => {
+		await restoreLoopState(ctx);
+	});
 
 
 
