@@ -1,6 +1,7 @@
 ---
 name: sca-audit
 description: Scan project dependencies for known vulnerabilities (CVEs). Use when reviewing dependency files (package.json, requirements.txt, go.mod, pom.xml, Gemfile, Cargo.toml, etc.), triaging Dependabot/Renovate alerts, or performing pre-deployment security checks.
+disable-model-invocation: true
 license: CC-BY-4.0
 ---
 

@@ -37,6 +37,8 @@ Personal pi coding agent package: extensions, skills, themes, and prompts.
 | `mermaid` | Create and validate Mermaid diagrams | Node.js (npx) |
 | `summarize` | URL/file → Markdown via `markitdown`, optional summarization | `uvx`, `markitdown` |
 
+Security routing keeps `code-security`, `llm-security`, and `security-scan` model-visible. Specialist audit skills remain available through `/skill:<name>` without occupying the default skill list.
+
 ## Tests
 
 ```bash

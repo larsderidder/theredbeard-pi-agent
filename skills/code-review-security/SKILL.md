@@ -1,6 +1,7 @@
 ---
 name: code-review-security
 description: Security-focused code review mapped to OWASP Top 10 and ASVS. Use when reviewing pull requests, auditing files or modules for vulnerabilities, or performing pre-merge security gate checks. Covers injection, auth, authorization, cryptography, data exposure, misconfiguration, and deserialization.
+disable-model-invocation: true
 license: CC-BY-4.0
 ---
 

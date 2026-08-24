@@ -1,6 +1,7 @@
 ---
 name: agentic-ai-risk-assess
 description: Assess agentic AI applications against the OWASP Top 10 for Agentic Applications 2026. Use when reviewing autonomous AI agents, multi-agent systems, or agentic workflows for security risks including goal hijacking, tool misuse, privilege abuse, and rogue agent behavior.
+disable-model-invocation: true
 license: CC-BY-4.0
 ---
 

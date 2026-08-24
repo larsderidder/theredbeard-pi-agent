@@ -1,6 +1,7 @@
 ---
 name: multi-agentic-threat-model
 description: Comprehensive threat modeling for multi-agent systems using CSA MAESTRO 7-layer framework and OWASP Multi-Agentic System Threat Modeling Guide v1.0. Systematically analyzes threats across all architectural layers from foundation models to agent ecosystems.
+disable-model-invocation: true
 license: CC-BY-4.0
 ---
 

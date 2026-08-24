@@ -1,6 +1,7 @@
 ---
 name: prd-securability-enhancement
 description: Enhance PRDs, feature specs, user stories, or product briefs with explicit OWASP ASVS coverage and FIASSE v1.0.4 SSEM implementation guidance — before code is written. Trigger on "harden the PRD/spec", "choose ASVS level", "map features to ASVS", "find missing security requirements", "add NFRs for security", "make these requirements securable", "security-review my product brief". For code review use securability-engineering-review; for code generation use securability-engineering.
+disable-model-invocation: true
 license: CC-BY-4.0
 ---
 

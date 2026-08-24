@@ -1,6 +1,7 @@
 ---
 name: llm-risk-assess
 description: Comprehensive LLM security assessment against OWASP Top 10 for LLM Applications 2025. Use when reviewing LLM-integrated applications, RAG pipelines, chatbots, AI agents, or GenAI features. Covers prompt injection, data poisoning, supply chain, excessive agency, and more with real-world attack scenarios and testing methodologies.
+disable-model-invocation: true
 allowed-tools: Read, Grep, Glob, Bash, WebFetch, Agent
 ---
 

@@ -1,6 +1,7 @@
 ---
 name: prompt-injection-test
 description: Test LLM-integrated applications against known prompt injection techniques, evasion methods, and attack intents using the Arcanum PI Taxonomy. Use when red-teaming AI apps, validating guardrails, or deepening LLM01 (Prompt Injection) assessments.
+disable-model-invocation: true
 license: CC-BY-4.0
 ---
 

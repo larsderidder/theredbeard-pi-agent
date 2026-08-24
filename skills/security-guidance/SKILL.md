@@ -1,6 +1,7 @@
 ---
 name: security-guidance
 description: Security-first development guidance based on OWASP ASVS (Application Security Verification Standard). Use this skill automatically when planning or implementing any code that touches user input, authentication, data persistence, network communication, file I/O, cryptography, or access control. This skill ensures all generated code adheres to industry-standard security practices with explicit references to applied guidance.
+disable-model-invocation: true
 ---
 
 # Security Guidance

@@ -1,6 +1,7 @@
 ---
 name: securability-engineering
 description: Generate, scaffold, or refactor code so it embodies FIASSE v1.0.4 SSEM qualities by default — 10 attributes, Transparency and Least-Astonishment principles, ASVS-aligned controls, defensive boundary handling. Trigger on "secure/securable/FIASSE-compliant code", "harden", "secure-by-default", "audit-ready", or security-sensitive components (auth, file upload, password reset, input validation, API endpoints, queries) — even when those words are not explicit. For requirements use prd-securability-enhancement; for review use securability-engineering-review. The full PRD→generate→review→enhance loop is opt-in via "--full-loop" or "end-to-end securable".
+disable-model-invocation: true
 license: CC-BY-4.0
 ---
 

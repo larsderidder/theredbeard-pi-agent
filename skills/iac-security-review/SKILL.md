@@ -1,6 +1,7 @@
 ---
 name: iac-security-review
 description: Security review of Infrastructure-as-Code (Terraform, Kubernetes, CloudFormation). Use when reviewing IaC files for misconfigurations, overpermissioning, exposed resources, missing encryption, secrets in code, and supply chain risks. Covers CIS benchmarks and cloud security best practices.
+disable-model-invocation: true
 license: CC-BY-4.0
 ---
 

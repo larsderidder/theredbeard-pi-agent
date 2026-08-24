@@ -1,6 +1,7 @@
 ---
 name: securability-engineering-review
 description: Score a codebase, file, or merge request against the FIASSE v1.0.4 SSEM model — 0-10 per attribute, equal-weighted pillars, evidence-backed strengths and weaknesses, prioritized recommendations, 50-item checklist appendix. Trigger on "review/score/audit securability", "SSEM scorecard", "FIASSE/SSEM compliance", "where would I start hardening this?", "is this audit-ready?", "security posture baseline" — including phrasings that don't say SSEM explicitly. For requirements use prd-securability-enhancement; for new code use securability-engineering.
+disable-model-invocation: true
 license: CC-BY-4.0
 ---
 

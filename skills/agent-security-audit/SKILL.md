@@ -1,6 +1,7 @@
 ---
 name: agent-security-audit
 description: Audit AI agent configurations for security risks — excessive permissions, prompt injection surfaces, data exfiltration paths, and missing guardrails. Use when reviewing CLAUDE.md files, MCP configs, agent orchestration code, or any AI agent setup.
+disable-model-invocation: true
 license: CC-BY-4.0
 ---
 
