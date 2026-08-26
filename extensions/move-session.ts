@@ -1,15 +1,19 @@
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 function parseTarget(raw: string): string {
   const trimmed = raw.trim();
-  if (!trimmed) return "";
+  if (!trimmed) {
+    return "";
+  }
 
   if (trimmed.startsWith('"')) {
     try {
       const parsed = JSON.parse(trimmed);
-      if (typeof parsed === "string") return parsed;
+      if (typeof parsed === "string") {
+        return parsed;
+      }
     } catch {
       // Fall back to the raw argument below.
     }
@@ -18,14 +22,50 @@ function parseTarget(raw: string): string {
   return trimmed;
 }
 
-function syncProcessCwd(targetCwd: string, ctx: any): boolean {
+function syncProcessCwd(targetCwd: string, ctx: ExtensionCommandContext): boolean {
   try {
     process.chdir(targetCwd);
     return true;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    ctx.ui.notify(`Session moved, but process cwd could not be updated: ${message}`, "error");
+    ctx.ui.notify(`Could not update the process cwd: ${message}`, "error");
     return false;
+  }
+}
+
+async function switchSessionFile(
+  sessionFile: string,
+  targetCwd: string,
+  successMessage: string,
+  ctx: ExtensionCommandContext,
+): Promise<boolean> {
+  const previousProcessCwd = process.cwd();
+  if (!syncProcessCwd(targetCwd, ctx)) {
+    return false;
+  }
+
+  let replacementCompleted = false;
+  try {
+    const result = await ctx.switchSession(sessionFile, {
+      withSession: async (newCtx) => {
+        replacementCompleted = true;
+        if (resolve(newCtx.cwd) !== targetCwd) {
+          throw new Error(`Replacement session cwd is ${newCtx.cwd}, expected ${targetCwd}`);
+        }
+        newCtx.ui.notify(successMessage, "info");
+      },
+    });
+
+    if (result.cancelled) {
+      process.chdir(previousProcessCwd);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    if (!replacementCompleted) {
+      process.chdir(previousProcessCwd);
+    }
+    throw error;
   }
 }
 
@@ -36,16 +76,11 @@ function getSessionManager(): any {
   return SessionManager;
 }
 
-async function moveSession(targetArg: string, ctx: any): Promise<void> {
+async function moveSession(targetArg: string, ctx: ExtensionCommandContext): Promise<void> {
   await ctx.waitForIdle();
 
   const targetCwd = resolve(ctx.cwd, targetArg);
   const currentCwd = resolve(ctx.cwd);
-
-  if (targetCwd === currentCwd) {
-    ctx.ui.notify(`Session is already in ${targetCwd}.`, "info");
-    return;
-  }
 
   if (activeMoveTarget) {
     ctx.ui.notify(`Session move already in progress to ${activeMoveTarget}.`, "error");
@@ -60,6 +95,11 @@ async function moveSession(targetArg: string, ctx: any): Promise<void> {
       return;
     }
 
+    if (targetCwd === currentCwd) {
+      await switchSessionFile(sourceFile, targetCwd, `Session rebound to ${targetCwd}`, ctx);
+      return;
+    }
+
     mkdirSync(targetCwd, { recursive: true });
 
     const newManager = getSessionManager().forkFrom(sourceFile, targetCwd);
@@ -70,13 +110,7 @@ async function moveSession(targetArg: string, ctx: any): Promise<void> {
       return;
     }
 
-    await ctx.switchSession(newFile, {
-      withSession: async (ctx: any) => {
-        const processCwdUpdated = syncProcessCwd(targetCwd, ctx);
-        const suffix = processCwdUpdated ? "" : ", but process cwd stayed unchanged";
-        ctx.ui.notify(`Session copied to ${targetCwd}${suffix}`, "success");
-      },
-    });
+    await switchSessionFile(newFile, targetCwd, `Session copied to ${targetCwd}`, ctx);
   } finally {
     activeMoveTarget = undefined;
   }

@@ -11,8 +11,9 @@
     "pi-extension"
   ],
   "scripts": {
-    "test": "npm run typecheck && npm run test:lazy-tools && npm run test:file-mutations && npm run test:projects",
+    "test": "npm run typecheck && npm run test:lazy-tools && npm run test:file-mutations && npm run test:move-session && npm run test:projects",
     "test:file-mutations": "node scripts/test-file-mutations.mjs",
+    "test:move-session": "node scripts/test-move-session.mjs",
     "test:lazy-tools": "node scripts/test-lazy-tools.mjs",
     "test:projects": "node scripts/test-projects.mjs",
     "test:search-security": "node scripts/test-search-security.mjs",
