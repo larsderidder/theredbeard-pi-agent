@@ -48,12 +48,14 @@ Use the fastest high-signal checks first. If a tool is missing, note it and cont
 
 Prefer these tools when available:
 
+Read the global `opengrep` skill for local SAST conventions, `betterleaks` for secret detection, and `trivy` for dependency or artifact checks. Keep credential validation disabled during ordinary scans and use explicit scanner selection. Community rules do not supply proprietary Pro capabilities or establish exhaustive security coverage.
+
 | Area | Preferred tools |
 |------|-----------------|
-| SAST | `semgrep --config auto`, `semgrep --config p/owasp-top-ten`, or `opengrep` equivalents |
-| Secrets | `gitleaks detect --no-banner --redact`, `trufflehog filesystem --no-update` |
-| Dependencies | `osv-scanner`, `npm audit`, `pnpm audit`, `yarn audit`, `pip-audit`, `govulncheck`, `cargo audit` |
-| Containers and IaC | `trivy fs`, `trivy config`, `checkov`, `tfsec`, `kubesec` |
+| SAST | `opengrep_check` with the pinned public Community rule collection, excluding Django-specific directories, plus additive local project rules; see the `opengrep` skill for scope and standalone reproduction |
+| Secrets | `betterleaks dir` for current files or `betterleaks git` for requested history, using full redaction and `--validation=false`; follow the `betterleaks` skill's metadata-only output commands |
+| Dependencies | `trivy fs --scanners vuln`, plus ecosystem-specific tools when needed: `osv-scanner`, `npm audit`, `pnpm audit`, `yarn audit`, `pip-audit`, `govulncheck`, `cargo audit` |
+| Containers and IaC | `trivy image --scanners vuln` for an authorized image, `trivy config` for infrastructure files; follow the `trivy` skill's privacy and exit-status flags. Complement with `checkov`, `tfsec`, or `kubesec` when appropriate and available |
 | SBOM and supply chain | `syft`, `grype`, `trivy fs --format cyclonedx`, `cosign verify`, `slsa-verifier`, OpenSSF Scorecard |
 | GitHub Actions | `actionlint`, `zizmor`, `poutine`, `frizbee`, Semgrep rules, and manual checks for untrusted interpolation, permissions, and pinned actions |
 | DAST and exposure checks | `nuclei`, only for owned or explicitly authorized targets |
@@ -165,10 +167,10 @@ Critical and high findings need a concrete attack scenario: who can exploit it, 
 ## Tool coverage
 | Check | Tool | Result |
 |-------|------|--------|
-| SAST | semgrep | clean / findings / not installed |
-| Secrets | gitleaks / trufflehog | clean / findings / not installed |
-| Dependencies | osv-scanner / pip-audit / govulncheck / ecosystem audit | clean / findings / not installed |
-| Containers and IaC | trivy / checkov | clean / findings / not installed |
+| SAST | opengrep | clean / findings / partial / not_applicable / failed / not installed |
+| Secrets | betterleaks | clean / findings / partial / failed / not installed |
+| Dependencies | trivy / ecosystem-specific scanners | clean / findings / partial / failed / not installed |
+| Containers and IaC | trivy / complementary IaC scanners | clean / findings / partial / failed / not installed |
 | GitHub Actions | actionlint / zizmor / poutine / frizbee / Semgrep | clean / findings / not installed |
 | Supply chain | scorecard / syft / grype / cosign / slsa-verifier | clean / findings / not applicable |
 | DAST and exposure checks | nuclei | clean / findings / not applicable |

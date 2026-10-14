@@ -114,13 +114,17 @@ function launchPi(cwd: string, args: string[]): string {
 	throw new Error("No supported terminal found. Set PI_FORK_TERMINAL or PI_FORK_COMMAND.");
 }
 
-function createBranchSession(ctx: any, leafId: string): string {
+function createBranchSession(ctx: any, leafId: string, btw2Task?: string): string {
 	const sourceFile = ctx.sessionManager.getSessionFile();
 	if (!sourceFile) throw new Error("Current session is not persisted yet");
 
 	const copy = getSessionManager().open(sourceFile, ctx.sessionManager.getSessionDir());
 	const sessionPath = copy.createBranchedSession(leafId);
 	if (!sessionPath) throw new Error("Could not create forked session file");
+
+	if (btw2Task) {
+		copy.appendCustomEntry(BTW2_TASK_ENTRY, { task: btw2Task });
+	}
 
 	return sessionPath;
 }
@@ -154,6 +158,15 @@ function launchFork(ctx: any, leafId: string | null, initialPrompt?: string, ses
 	return launchPiSession(ctx.cwd, sessionPath, initialPrompt, sessionName);
 }
 
+function launchBtw2Fork(ctx: any, leafId: string | null, task: string): string {
+	if (!leafId) {
+		return launchPi(ctx.cwd, [task]);
+	}
+
+	const sessionPath = createBranchSession(ctx, leafId, task);
+	return launchPiSession(ctx.cwd, sessionPath);
+}
+
 function buildLoopSubagentPrompt(taskScript: string, taskParam?: string): string {
 	const parts = [shellQuote(taskScript)];
 	if (taskParam?.trim()) parts.push(shellQuote(taskParam.trim()));
@@ -161,6 +174,21 @@ function buildLoopSubagentPrompt(taskScript: string, taskParam?: string): string
 }
 
 const MAX_BTW_PROMPT_LENGTH = 100_000;
+const BTW2_CONTEXT_THRESHOLD_TOKENS = 80_000;
+const BTW2_TASK_ENTRY = "btw2-task";
+const BTW2_RUN_ENTRY = "btw2-run";
+const BTW2_COMPACTION_PROVIDER = "openai-codex";
+const BTW2_COMPACTION_MODEL = "gpt-5.6-luna";
+
+interface Btw2Task {
+	entryId: string;
+	task: string;
+}
+
+interface Btw2RunData {
+	taskEntryId?: string;
+	status?: string;
+}
 
 function normalizeBtwPrompt(input: string): string | undefined {
 	const prompt = input.trim();
@@ -172,6 +200,117 @@ function normalizeBtwPrompt(input: string): string | undefined {
 	}
 
 	return prompt;
+}
+
+function findPendingBtw2Task(ctx: any): Btw2Task | undefined {
+	const branch: SessionEntry[] = ctx.sessionManager.getBranch();
+	const dispatchedTaskIds = new Set<string>();
+
+	for (const entry of branch) {
+		if (entry.type !== "custom" || entry.customType !== BTW2_RUN_ENTRY) {
+			continue;
+		}
+		const data = entry.data as Btw2RunData | undefined;
+		if (data?.status === "dispatched" && data.taskEntryId) {
+			dispatchedTaskIds.add(data.taskEntryId);
+		}
+	}
+
+	for (let index = branch.length - 1; index >= 0; index--) {
+		const entry = branch[index];
+		if (entry.type !== "custom" || entry.customType !== BTW2_TASK_ENTRY || dispatchedTaskIds.has(entry.id)) {
+			continue;
+		}
+		const data = entry.data as { task?: unknown } | undefined;
+		if (typeof data?.task !== "string") {
+			continue;
+		}
+		try {
+			const task = normalizeBtwPrompt(data.task);
+			if (task) {
+				return { entryId: entry.id, task };
+			}
+		} catch {
+			continue;
+		}
+	}
+
+	return undefined;
+}
+
+function buildBtw2CompactionInstructions(task: string): string {
+	return `Prepare context for this independent task:\n\n<task>\n${task}\n</task>\n\nPreserve relevant facts, user constraints, decisions, exact paths, errors, and project state. Preserve uncertain context that may be relevant. Do not continue the parent task.`;
+}
+
+async function startBtw2Task(pi: ExtensionAPI, task: Btw2Task, ctx: any): Promise<void> {
+	pi.appendEntry(BTW2_RUN_ENTRY, { taskEntryId: task.entryId, status: "running" });
+
+	const usage = ctx.getContextUsage();
+	if (usage?.tokens !== null && usage?.tokens !== undefined && usage.tokens < BTW2_CONTEXT_THRESHOLD_TOKENS) {
+		pi.appendEntry(BTW2_RUN_ENTRY, {
+			taskEntryId: task.entryId,
+			status: "dispatched",
+			compacted: false,
+		});
+		pi.sendUserMessage(task.task);
+		return;
+	}
+
+	const originalModel = ctx.model;
+	const originalThinkingLevel = pi.getThinkingLevel();
+	let modelChanged = false;
+	let dispatched = false;
+
+	const compactionModel = ctx.modelRegistry.find(BTW2_COMPACTION_PROVIDER, BTW2_COMPACTION_MODEL);
+	if (
+		compactionModel &&
+		originalModel &&
+		(originalModel.provider !== compactionModel.provider || originalModel.id !== compactionModel.id)
+	) {
+		modelChanged = await pi.setModel(compactionModel);
+	}
+	pi.setThinkingLevel("minimal");
+	ctx.ui.setStatus?.("btw2", "Preparing task context...");
+	ctx.ui.notify("Preparing task context...", "info");
+
+	const dispatchTask = async (compacted: boolean, error?: Error) => {
+		if (dispatched) {
+			return;
+		}
+		dispatched = true;
+		ctx.ui.setStatus?.("btw2", undefined);
+
+		try {
+			if (modelChanged && originalModel) {
+				await pi.setModel(originalModel);
+			}
+			pi.setThinkingLevel(originalThinkingLevel);
+		} catch (restoreError) {
+			const message = restoreError instanceof Error ? restoreError.message : String(restoreError);
+			ctx.ui.notify(`Could not restore the original model: ${message}`, "error");
+		}
+
+		pi.appendEntry(BTW2_RUN_ENTRY, {
+			taskEntryId: task.entryId,
+			status: "dispatched",
+			compacted,
+			error: error?.message,
+		});
+		if (error) {
+			ctx.ui.notify(`Task context compaction failed, continuing with inherited context: ${error.message}`, "warning");
+		}
+		pi.sendUserMessage(task.task);
+	};
+
+	ctx.compact({
+		customInstructions: buildBtw2CompactionInstructions(task.task),
+		onComplete: () => {
+			void dispatchTask(true);
+		},
+		onError: (error: Error) => {
+			void dispatchTask(false, error);
+		},
+	});
 }
 
 function splitQuotedArgs(input: string): string[] {
@@ -236,6 +375,23 @@ function buildForkChoices(ctx: any): Array<{ label: string; leafId: string | nul
 }
 
 export default function forkTerminalExtension(pi: ExtensionAPI) {
+	pi.on("session_start", (_event, ctx) => {
+		const task = findPendingBtw2Task(ctx);
+		if (!task) {
+			return;
+		}
+
+		// session_start runs while Pi is still binding extensions. Starting compaction
+		// there races the remaining startup work and can terminate the child session.
+		setImmediate(() => {
+			void startBtw2Task(pi, task, ctx).catch((error) => {
+				const message = error instanceof Error ? error.message : String(error);
+				pi.appendEntry(BTW2_RUN_ENTRY, { taskEntryId: task.entryId, status: "failed", error: message });
+				ctx.ui.notify(`Could not start /btw2 task: ${message}`, "error");
+			});
+		});
+	});
+
 	pi.registerTool({
 		name: "clone-terminal",
 		label: "Clone Terminal",
@@ -335,14 +491,19 @@ export default function forkTerminalExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("btw", {
-		description: "Clone the current state, or the state before the active turn, in a new terminal",
+	pi.registerCommand("btw2", {
+		description: "Fork task-scoped compact context in a new terminal",
 		handler: async (args, ctx) => {
-			let prompt: string | undefined;
+			let task: string | undefined;
 			try {
-				prompt = normalizeBtwPrompt(args);
+				task = normalizeBtwPrompt(args);
 			} catch (error) {
 				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+				return;
+			}
+
+			if (!task) {
+				ctx.ui.notify("Usage: /btw2 <task>", "error");
 				return;
 			}
 
@@ -351,12 +512,8 @@ export default function forkTerminalExtension(pi: ExtensionAPI) {
 				leafId = findAssistantBeforeLastUserMessageId(ctx);
 			}
 
-			const sessionName = prompt ? `btw: ${oneLine(prompt).slice(0, 80)}` : undefined;
-			const terminal = launchFork(ctx, leafId, prompt, sessionName);
-			const message = prompt
-				? `Opened clone in ${terminal} and submitted prompt`
-				: `Opened clone in ${terminal}`;
-			ctx.ui.notify(message, "info");
+			const terminal = launchBtw2Fork(ctx, leafId, task);
+			ctx.ui.notify(`Opened task-scoped clone in ${terminal}`, "info");
 		},
 	});
 

@@ -9,9 +9,9 @@ Use the `gh` CLI to interact with GitHub. Always specify `--repo owner/repo` whe
 
 ## Important Restrictions
 
-**NEVER push without explicit user approval.** Before running any command that pushes commits, tags, or branches, ask the user for confirmation.
+**Do not push without explicit user approval.** Ask for permission if the commits, tags, or branches to push have not already been authorized. Do not ask again for the same authorized scope.
 
-**NEVER comment on issues, PRs, or commits on behalf of the user.** Do not use `gh pr comment`, `gh issue comment`, `gh pr review`, or any other commenting functionality. Draft comments for the user to post themselves.
+**Do not post GitHub content without explicit user permission.** This includes comments, issues, PRs, reviews, and releases. Present the proposed action and content and ask for scoped approval when needed, especially in Lars-owned or internal projects. After approval, execute the authorized action rather than requiring Lars to post it manually. Explicit approval of a clearly described workflow covers the GitHub actions named in that workflow; ask before expanding its scope.
 
 ## Pull Requests
 

@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, openSync, readFileSync, readdirSync, readSync, closeSync, statSync } from "node:fs";
-import { createRequire } from "node:module";
 import os from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -28,7 +28,6 @@ interface SessionRow {
   messageCount: number;
   firstUserPrompt: string | null;
   handoffGoal: string | null;
-  handoffNextTask: string | null;
 }
 
 interface TailEvent {
@@ -56,7 +55,6 @@ interface SessionPeer {
   messageCount: number;
   firstUserPrompt?: string;
   handoffGoal?: string;
-  handoffNextTask?: string;
   running: boolean;
   activity: PeerActivity;
 }
@@ -176,8 +174,7 @@ function readRecentSessionRows(
   currentSessionId: string | undefined,
   includeSelf: boolean,
 ): SessionRow[] {
-  const Database = loadBetterSqlite3();
-  const db = new Database(indexPath, { readonly: true, fileMustExist: true });
+  const db = new DatabaseSync(indexPath, { readOnly: true });
   try {
     return db
       .prepare(
@@ -192,8 +189,7 @@ function readRecentSessionRows(
             created_ts as startedAt,
             modified_ts as modifiedAt,
             message_count as messageCount,
-            handoff_goal as handoffGoal,
-            handoff_next_task as handoffNextTask
+            handoff_goal as handoffGoal
           FROM sessions
           WHERE (? IS NULL OR modified_ts >= ?)
             AND (? = 1 OR session_id != ?)
@@ -207,15 +203,10 @@ function readRecentSessionRows(
         includeSelf ? 1 : 0,
         currentSessionId ?? "",
         RECENT_SESSION_SCAN_LIMIT,
-      ) as SessionRow[];
+      ) as unknown as SessionRow[];
   } finally {
     db.close();
   }
-}
-
-function loadBetterSqlite3(): any {
-  const requireFromPiNpm = createRequire(path.join(os.homedir(), ".pi", "agent", "npm", "package.json"));
-  return requireFromPiNpm("better-sqlite3");
 }
 
 function buildPeer(row: SessionRow): SessionPeer | undefined {
@@ -235,7 +226,6 @@ function buildPeer(row: SessionRow): SessionPeer | undefined {
     messageCount: row.messageCount,
     firstUserPrompt: row.firstUserPrompt ?? undefined,
     handoffGoal: row.handoffGoal ?? undefined,
-    handoffNextTask: row.handoffNextTask ?? undefined,
     running: isSessionRunning(row.sessionId),
     activity,
   };
@@ -469,7 +459,7 @@ function formatPeerSessions(result: ReturnType<typeof pollPeerSessions>): string
   }
 
   result.peers.forEach((peer, index) => {
-    const title = peer.sessionName || peer.handoffNextTask || peer.firstUserPrompt || "unnamed";
+    const title = peer.sessionName || peer.firstUserPrompt || "unnamed";
     lines.push(`${index + 1}. ${peer.running ? "running" : "recent"} ${shortId(peer.sessionId)}  ${truncateOneLine(title, 96)}`);
     lines.push(`   session: ${peer.sessionId}`);
     lines.push(`   updated: ${formatTimestamp(peer.modifiedAt)} (${formatAge(peer.modifiedAt)})`);
@@ -477,7 +467,6 @@ function formatPeerSessions(result: ReturnType<typeof pollPeerSessions>): string
     appendEventLine(lines, "last user", peer.activity.lastUser);
     appendEventLine(lines, "last action", peer.activity.lastTool ?? peer.activity.lastBash);
     appendEventLine(lines, "last response", peer.activity.lastAssistant);
-    if (peer.handoffNextTask) lines.push(`   next task: ${truncateOneLine(peer.handoffNextTask, TEXT_LIMIT)}`);
   });
 
   return lines.join("\n");
