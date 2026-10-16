@@ -9,7 +9,7 @@ Review code you did not write. Report only. Never edit files.
 
 ## Scope
 
-Parse the user's request for what to review. Ask if unclear.
+Infer scope from the request and repository context. Ask only when the target or base is genuinely ambiguous.
 
 | Scope | How to get the diff |
 |-------|---------------------|
@@ -19,11 +19,11 @@ Parse the user's request for what to review. Ask if unclear.
 | **unstaged** | `git diff` |
 | **unpushed** | `git diff @{u}..HEAD` (fall back to `origin/main..HEAD`) |
 
-Always read the full diff first. For PRs, also read the title, description, and any existing review comments. Then ask the user what the purpose of the changes is. Use their answer as the primary lens for the review.
+Read the diff and relevant surrounding code. For PRs, read the title, description, and existing review comments. Establish the intended behavior from those sources and the user's request; ask about purpose only when it remains unclear.
 
 ## Checks
 
-After determining scope, present the list of checks and let the user pick which ones to run. If the user already specified checks in their request, use those without asking.
+Apply the relevant checks below, emphasizing any concerns the user named. A general review does not require the user to select checks first.
 
 ### 1. Correctness
 Logic errors, off-by-one mistakes, race conditions, null/undefined hazards, unhandled error paths, broken edge cases. Trace the code paths mentally; do not assume it works because it looks plausible.
@@ -45,44 +45,10 @@ For each risky area in the change, assess two things: likelihood of breakage (ho
 
 ## Output
 
-```
-# Peer Review: [PR title / branch / commit description]
+Return substantive findings with file locations, consequences, and a suggested correction when useful. Distinguish correctness or compatibility problems from optional improvements. If no substantive issue was found, say so and note relevant verification limits.
 
-**Scope**: [what was reviewed]
-**Files changed**: [count]
-**Findings**: [count by severity]
+Keep the response proportional to the change. Separate summaries, praise sections, severity buckets, and statistics are optional, not a required report structure.
 
-## Summary
-[2-3 sentences: what this change does, overall impression, biggest concerns]
+## Review boundaries
 
-## Findings
-
-### Critical
-[file:line, description, why it matters]
-
-### High
-[file:line, description, why it matters]
-
-### Medium
-[file:line, description, suggested improvement]
-
-### Low
-[file:line, description]
-
-## What Looks Good
-[Briefly note things done well. Keeps the review balanced.]
-
-## Stats
-| Check | Findings |
-|-------|----------|
-| ... | ... |
-```
-
-## Principles
-
-- **Never edit files.** This is a report. Propose fixes in prose or small inline snippets within the report.
-- Every finding references a specific file and line.
-- Use absolute counts, not percentages.
-- Distinguish between "must fix" (critical/high) and "consider" (medium/low). Do not treat everything as blocking.
-- If existing review comments already cover an issue, do not repeat it. Note agreement briefly and move on.
-- Check the full codebase for context when needed (e.g., verifying something is actually duplicated, or that a type exists elsewhere), but only report on the changed files.
+This skill remains report-only. Use surrounding code to verify findings, but keep them about the reviewed changes. Avoid repeating issues already covered by existing comments unless there is new evidence.

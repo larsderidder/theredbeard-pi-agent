@@ -5,11 +5,11 @@ description: "Focused code quality audit: find duplication, dead code, god compo
 
 # Code Quality Audit
 
-Parse the user's request for three things. Ask if unclear.
+Infer scope, mode, and emphasis from the request and available context. Ask only when a missing decision would materially change the work.
 
 ## Scope
 
-What code to audit. Exactly one of:
+Use the requested files or changes. Common ways to identify them:
 
 | Scope | Files |
 |-------|-------|
@@ -18,20 +18,20 @@ What code to audit. Exactly one of:
 | **path** | User-provided files, directories, or globs |
 | **all** | `git ls-files` |
 
-Filter to source files only. Skip images, lockfiles, build output, `node_modules`. If zero files, stop. If >200 files, confirm or suggest narrowing.
+Focus on relevant source files, excluding dependencies and generated output. If the requested scope cannot be covered meaningfully, explain the coverage limit and resolve it with the user rather than silently sampling.
 
 ## Mode
 
 | Mode | Behavior |
 |------|----------|
-| **report** | Structured Markdown report. Do NOT edit files. |
+| **report** | Return findings without editing files. |
 | **fix** | Apply fixes directly. Summarize what changed and why. Flag anything too risky as "Manual review needed." |
 
-If not specified, ask.
+A review or audit defaults to report mode. Apply fixes when the user asks for changes; clarify genuinely ambiguous requests.
 
 ## Checks
 
-After determining scope and mode, present the list of checks and let the user pick which ones to run. If the user already specified checks in their request, use those without asking.
+Run the applicable checks below, guided by the user's stated concerns. Skip irrelevant checks without requiring a menu selection.
 
 ### 1. Duplication
 Identical or near-identical function bodies, repeated inline logic (5+ lines), overlapping type/interface definitions, constants or enums defined in multiple places, same-purpose utilities under different names. Cross-reference the full project, not just scoped files. In fix mode: extract to a single location, update call sites.
@@ -53,34 +53,10 @@ API response types that don't match fetch code (extra/missing fields, wrong opti
 
 ## Output
 
-### Report Mode
+Return concise, evidence-backed findings with file locations, the concrete problem, and a possible correction. Explain severity where it helps distinguish consequential issues from optional improvements. Say when no substantive issues were found.
 
-```
-# Code Quality Report
-**Scope**: [what was audited]
-**Files**: [count]
+For fix mode, summarize the changes and verification, and identify unresolved or risky decisions. Match the response size to the work; a fixed report template or statistics table is not required.
 
-## Summary
-[2-3 sentences on biggest issues]
+## Review boundaries
 
-## Findings
-### Critical / High / Medium / Low
-[file:line, description, suggested fix]
-
-## Stats
-| Check | Findings |
-|-------|----------|
-| ... | ... |
-```
-
-### Fix Mode
-
-Print a grouped summary of changes. List ambiguous or risky items under "Manual review needed."
-
-## Principles
-
-- Every finding references a specific file and line.
-- Use absolute counts, not percentages. "3 duplicated functions across 4 files," not "50% duplication." Concrete numbers enable decisions; percentages obscure them.
-- Respect the codebase's existing style and conventions.
-- Only report on files in scope. Cross-reference the full project when checking usage.
-- If a check doesn't apply (e.g., no API calls for check 6), say so and skip it.
+Follow the codebase's conventions. Cross-reference other files when needed to verify usage or duplication, but report findings within the requested scope. Avoid presenting style preferences as defects.
