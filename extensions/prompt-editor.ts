@@ -1,6 +1,7 @@
 import type { ModelThinkingLevel as ThinkingLevel } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CustomEditor, ModelSelectorComponent, SettingsManager, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { CustomEditor, DynamicBorder, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { Container, fuzzyFilter, Input, SelectList, Text } from "@earendil-works/pi-tui";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs/promises";
@@ -868,24 +869,78 @@ async function pickModelForModeUI(
 	ctx: ExtensionContext,
 	spec: ModeSpec,
 ): Promise<{ provider: string; modelId: string } | undefined> {
-	if (!ctx.hasUI) return undefined;
+	if (!ctx.hasUI) {
+		return undefined;
+	}
 
-	const settingsManager = SettingsManager.inMemory();
-	const currentModel = spec.provider && spec.modelId ? ctx.modelRegistry.find(spec.provider, spec.modelId) : ctx.model;
+	const models = ctx.modelRegistry.getAvailable();
+	if (models.length === 0) {
+		ctx.ui.notify("No models available from configured providers", "warning");
+		return undefined;
+	}
+	const currentModel = ctx.modelRegistry.find(spec.provider ?? "", spec.modelId ?? "") ?? ctx.model;
+	const items = models.map((model) => ({
+		value: `${model.provider}/${model.id}`,
+		label: model.id,
+		description: `${model.provider} ${model.name}`,
+	}));
 
-	const scopedModels: Array<{ model: any; thinkingLevel: string }> = [];
-
-	return ctx.ui.custom<{ provider: string; modelId: string } | undefined>((tui, _theme, _keybindings, done) => {
-		const selector = new ModelSelectorComponent(
-			tui,
-			currentModel,
-			settingsManager,
-			ctx.modelRegistry as any,
-			scopedModels as any,
-			(model) => done({ provider: model.provider, modelId: model.id }),
-			() => done(undefined),
-		);
-		return selector;
+	// Pi's internal model selector now requires a runtime unavailable to extensions.
+	return ctx.ui.custom<{ provider: string; modelId: string } | undefined>((tui, theme, keybindings, done) => {
+		const container = new Container();
+		const input = new Input();
+		const listContainer = new Container();
+		const listTheme = {
+			selectedPrefix: (text: string) => theme.fg("accent", text),
+			selectedText: (text: string) => theme.fg("accent", text),
+			description: (text: string) => theme.fg("muted", text),
+			scrollInfo: (text: string) => theme.fg("dim", text),
+			noMatch: (text: string) => theme.fg("warning", text),
+		};
+		let list: SelectList;
+		const filterModels = () => {
+			const filtered = fuzzyFilter(items, input.getValue(), (item) => `${item.label} ${item.description}`);
+			list = new SelectList(filtered, 12, listTheme);
+			list.onSelect = (item) => {
+				const model = models.find((candidate) => `${candidate.provider}/${candidate.id}` === item.value)!;
+				done({ provider: model.provider, modelId: model.id });
+			};
+			list.onCancel = () => done(undefined);
+			listContainer.clear();
+			listContainer.addChild(list);
+		};
+		filterModels();
+		if (currentModel) {
+			list!.setSelectedIndex(items.findIndex((item) => item.value === `${currentModel.provider}/${currentModel.id}`));
+		}
+		container.addChild(new DynamicBorder());
+		container.addChild(new Text(theme.fg("accent", "Select model. Type to search."), 0, 0));
+		container.addChild(input);
+		container.addChild(listContainer);
+		container.addChild(new DynamicBorder());
+		return {
+			get focused() {
+				return input.focused;
+			},
+			set focused(value: boolean) {
+				input.focused = value;
+			},
+			render: (width: number) => container.render(width),
+			invalidate: () => container.invalidate(),
+			handleInput(data: string) {
+				const navigation = ["tui.select.up", "tui.select.down", "tui.select.confirm", "tui.select.cancel"] as const;
+				if (navigation.some((action) => keybindings.matches(data, action))) {
+					list.handleInput(data);
+				} else {
+					const previousQuery = input.getValue();
+					input.handleInput(data);
+					if (input.getValue() !== previousQuery) {
+						filterModels();
+					}
+				}
+				tui.requestRender();
+			},
+		};
 	});
 }
 

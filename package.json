@@ -14,7 +14,7 @@
     "pi-extension"
   ],
   "scripts": {
-    "test": "npm run typecheck && npm run test:tool-permissions && npm run test:kubectl && npm run test:lazy-tools && npm run test:file-mutations && npm run test:credential-scrubber && npm run test:fork-terminal && npm run test:move-session && npm run test:projects && npm run test:todos && npm run test:recap && npm run test:opengrep",
+    "test": "npm run typecheck && npm run test:tool-permissions && npm run test:kubectl && npm run test:lazy-tools && npm run test:file-mutations && npm run test:credential-scrubber && npm run test:fork-terminal && npm run test:move-session && npm run test:projects && npm run test:todos && npm run test:prompt-editor && npm run test:recap && npm run test:opengrep",
     "test:file-mutations": "node scripts/test-file-mutations.mjs",
     "test:credential-scrubber": "node scripts/test-credential-scrubber.mjs",
     "test:fork-terminal": "node scripts/test-fork-terminal.mjs",
@@ -23,6 +23,7 @@
     "test:projects": "node scripts/test-projects.mjs",
     "test:todos": "node scripts/test-todos.mjs",
     "test:recap": "node scripts/test-recap.mjs",
+    "test:prompt-editor": "node scripts/test-prompt-editor.mjs",
     "test:opengrep": "node scripts/test-opengrep.mjs",
     "test:opengrep:live": "node scripts/test-opengrep.mjs --live",
     "test:search-security": "node scripts/test-search-security.mjs",
@@ -57,11 +58,17 @@
     "yaml": "2.9.1"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.84.2",
-    "@earendil-works/pi-coding-agent": "0.84.2",
-    "@earendil-works/pi-tui": "0.84.2",
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-tui": "1.4.0",
     "@types/node": "^22.19.0",
-    "typebox": "1.3.7",
+    "jiti": "2.7.0",
+    "typebox": "1.3.27",
     "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "@earendil-works/pi-coding-agent": {
+      "undici": "8.12.3"
+    }
   }
 }
