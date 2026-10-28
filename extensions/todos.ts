@@ -5,7 +5,7 @@
  *
  * File format in .pi/todos:
  * - The file starts with a JSON object (not YAML) containing the front matter:
- *   { id, title, tags, status, created_at, assigned_to_session, project_id }
+ *   { id, title, tags, status, created_at, assigned_to_session, project_id, depends_on, parent_id }
  * - After the JSON block comes optional markdown body text separated by a blank line.
  * - Example:
  *   {
@@ -37,6 +37,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import crypto from "node:crypto";
+import { describeTodos, isTodoComplete, referencedTodoIds, validateTodoChange, type TodoRelationshipState } from "../lib/todo-relationships.ts";
 import {
 	Container,
 	type Focusable,
@@ -92,7 +93,7 @@ const DEFAULT_TODO_SETTINGS = {
 };
 const LOCK_TTL_MS = 30 * 60 * 1000;
 
-interface TodoFrontMatter {
+interface TodoFrontMatter extends Partial<TodoRelationshipState> {
 	id: string;
 	title: string;
 	tags: string[];
@@ -100,6 +101,8 @@ interface TodoFrontMatter {
 	created_at: string;
 	assigned_to_session?: string;
 	project_id?: string;
+	depends_on?: string[];
+	parent_id?: string;
 }
 
 interface TodoRecord extends TodoFrontMatter {
@@ -122,6 +125,8 @@ const TodoParams = Type.Object({
 	action: StringEnum([
 		"list",
 		"list-all",
+		"ready",
+		"blocked",
 		"get",
 		"create",
 		"update",
@@ -144,8 +149,11 @@ const TodoParams = Type.Object({
 			tags: Type.Optional(Type.Array(Type.String(), { description: "Match todos having ALL of these tags" })),
 			status: Type.Optional(Type.String({ description: "Match todos with this status" })),
 			project_id: Type.Optional(Type.String({ description: "Match todos connected to this project" })),
+			parent_id: Type.Optional(Type.String({ description: "Match direct subtasks of this todo" })),
+			ready: Type.Optional(Type.Boolean({ description: "Match open, unclaimed, unblocked tasks" })),
+			blocked: Type.Optional(Type.Boolean({ description: "Match tasks with unfinished prerequisites or subtasks" })),
 			untagged: Type.Optional(Type.Boolean({ description: "Match todos with no tags" })),
-		}, { description: "Filter to select todos for batch-update (combined with ids via union)" }),
+		}, { description: "Filter lists or batch-update targets; supplied conditions must all match" }),
 	),
 	title: Type.Optional(Type.String({ description: "Short summary shown in lists" })),
 	status: Type.Optional(Type.String({ description: "Todo status" })),
@@ -163,12 +171,17 @@ const TodoParams = Type.Object({
 		Type.String({ description: "Project to connect (PROJECT-<hex> or raw hex id)" }),
 	),
 	clear_project: Type.Optional(Type.Boolean({ description: "Remove the todo's project connection" })),
+	depends_on: Type.Optional(Type.Array(Type.String(), { description: "Prerequisite todo IDs. Replaces the list; [] clears it. Create, update, or batch-update." })),
+	parent_id: Type.Optional(Type.String({ description: "Parent todo ID, making this task a subtask. Create, update, or batch-update." })),
+	clear_parent: Type.Optional(Type.Boolean({ description: "Detach this subtask from its parent" })),
 	force: Type.Optional(Type.Boolean({ description: "Override another session's assignment" })),
 });
 
 type TodoAction =
 	| "list"
 	| "list-all"
+	| "ready"
+	| "blocked"
 	| "get"
 	| "create"
 	| "update"
@@ -193,7 +206,7 @@ type TodoMenuAction =
 	| "view";
 
 type TodoToolDetails =
-	| { action: "list" | "list-all"; todos: TodoFrontMatter[]; currentSessionId?: string; error?: string }
+	| { action: "list" | "list-all" | "ready" | "blocked"; todos: TodoFrontMatter[]; currentSessionId?: string; error?: string }
 	| {
 			action: "get" | "create" | "update" | "append" | "delete" | "claim" | "release";
 			todo: TodoRecord;
@@ -253,7 +266,7 @@ function formatProjectId(id: string): string {
 }
 
 function isTodoClosed(status: string): boolean {
-	return ["closed", "done"].includes(status.toLowerCase());
+	return isTodoComplete(status);
 }
 
 function clearAssignmentIfClosed(todo: TodoFrontMatter): void {
@@ -281,7 +294,7 @@ function buildTodoSearchText(todo: TodoFrontMatter): string {
 	if (todo.project_id) {
 		project = `${formatProjectId(todo.project_id)} project:${todo.project_id}`;
 	}
-	return `${formatTodoId(todo.id)} ${todo.id} ${todo.title} ${tags} ${todo.status} ${assignment} ${project}`.trim();
+	return `${formatTodoId(todo.id)} ${todo.id} ${todo.title} ${tags} ${todo.status} ${assignment} ${project} ${formatTodoRelationshipSummary(todo)}`.trim();
 }
 
 function filterTodos(todos: TodoFrontMatter[], query: string): TodoFrontMatter[] {
@@ -471,6 +484,7 @@ class TodoSelectorComponent extends Container implements Focusable {
 				projectText = ` (${formatProjectId(todo.project_id)})`;
 			}
 			const assignmentText = renderAssignmentSuffix(this.theme, todo, this.currentSessionId);
+			const relationshipText = this.theme.fg("muted", formatTodoRelationshipSummary(todo));
 			const line =
 				prefix +
 				this.theme.fg("accent", formatTodoId(todo.id)) +
@@ -479,6 +493,7 @@ class TodoSelectorComponent extends Container implements Focusable {
 				this.theme.fg("muted", tagText) +
 				this.theme.fg("muted", projectText) +
 				assignmentText +
+				relationshipText +
 				" " +
 				this.theme.fg(statusColor, `(${todo.status || "open"})`);
 			this.listContainer.addChild(new Text(line, 0, 0));
@@ -675,7 +690,7 @@ class TodoDetailOverlayComponent {
 
 	private getMarkdownText(): string {
 		const body = this.todo.body?.trim();
-		return body ? body : "_No details yet._";
+		return [...formatTodoRelationships(this.todo), "", body || "_No details yet._"].join("\n\n");
 	}
 
 	handleInput(keyData: string): void {
@@ -885,44 +900,28 @@ async function readTodoSettings(todosDir: string): Promise<TodoSettings> {
 	return normalizeTodoSettings(data);
 }
 
-async function garbageCollectTodos(todosDir: string, settings: TodoSettings): Promise<void> {
-	if (!settings.gc) return;
-
-	let entries: string[] = [];
-	try {
-		entries = await fs.readdir(todosDir);
-	} catch {
+async function garbageCollectTodos(todosDir: string, settings: TodoSettings, ctx: ExtensionContext): Promise<void> {
+	if (!settings.gc) {
 		return;
 	}
-
-	const cutoff = Date.now() - settings.gcDays * 24 * 60 * 60 * 1000;
-	await Promise.all(
-		entries
-			.filter((entry) => entry.endsWith(".md"))
-			.map(async (entry) => {
-				const id = entry.slice(0, -3);
-				const filePath = path.join(todosDir, entry);
-				await withFileMutationQueue(filePath, async () => {
-					try {
-						const content = await fs.readFile(filePath, "utf8");
-						const { frontMatter } = splitFrontMatter(content);
-						const parsed = parseFrontMatter(frontMatter, id);
-						if (!isTodoClosed(parsed.status)) {
-							return;
-						}
-						const createdAt = Date.parse(parsed.created_at);
-						if (!Number.isFinite(createdAt)) {
-							return;
-						}
-						if (createdAt < cutoff) {
-							await fs.unlink(filePath);
-						}
-					} catch {
-						// ignore unreadable todo
-					}
-				});
-			}),
-	);
+	await withTodoStoreLock(todosDir, ctx, async () => {
+		const todos = await listTodos(todosDir);
+		const retained = referencedTodoIds(todos);
+		const cutoff = Date.now() - settings.gcDays * 24 * 60 * 60 * 1000;
+		for (const todo of todos) {
+			const createdAt = Date.parse(todo.created_at);
+			if (retained.has(todo.id) || !isTodoClosed(todo.status) || !Number.isFinite(createdAt) || createdAt >= cutoff) {
+				continue;
+			}
+			if (existsSync(getLockPath(todosDir, todo.id))) {
+				continue;
+			}
+			const filePath = getTodoPath(todosDir, todo.id);
+			await withFileMutationQueue(filePath, async () => {
+				await fs.unlink(filePath);
+			});
+		}
+	});
 }
 
 function getTodoPath(todosDir: string, id: string): string {
@@ -959,6 +958,12 @@ function parseFrontMatter(text: string, idFallback: string): TodoFrontMatter {
 		}
 		if (typeof parsed.project_id === "string" && isValidProjectId(parsed.project_id)) {
 			data.project_id = normalizeProjectId(parsed.project_id);
+		}
+		if (Array.isArray(parsed.depends_on)) {
+			data.depends_on = [...new Set(parsed.depends_on.filter((id): id is string => typeof id === "string").map((id) => normalizeTodoId(id).toLowerCase()))];
+		}
+		if (typeof parsed.parent_id === "string" && parsed.parent_id) {
+			data.parent_id = normalizeTodoId(parsed.parent_id).toLowerCase();
 		}
 		if (Array.isArray(parsed.tags)) {
 			data.tags = parsed.tags.filter((tag): tag is string => typeof tag === "string");
@@ -1030,16 +1035,7 @@ function splitFrontMatter(content: string): { frontMatter: string; body: string 
 function parseTodoContent(content: string, idFallback: string): TodoRecord {
 	const { frontMatter, body } = splitFrontMatter(content);
 	const parsed = parseFrontMatter(frontMatter, idFallback);
-	return {
-		id: idFallback,
-		title: parsed.title,
-		tags: parsed.tags ?? [],
-		status: parsed.status,
-		created_at: parsed.created_at,
-		assigned_to_session: parsed.assigned_to_session,
-		project_id: parsed.project_id,
-		body: body ?? "",
-	};
+	return { ...parsed, id: idFallback, body: body ?? "" };
 }
 
 function serializeTodo(todo: TodoRecord): string {
@@ -1052,6 +1048,8 @@ function serializeTodo(todo: TodoRecord): string {
 			created_at: todo.created_at,
 			assigned_to_session: todo.assigned_to_session || undefined,
 			project_id: todo.project_id || undefined,
+			depends_on: todo.depends_on,
+			parent_id: todo.parent_id,
 		},
 		null,
 		2,
@@ -1072,8 +1070,23 @@ async function readTodoFile(filePath: string, idFallback: string): Promise<TodoR
 	return parseTodoContent(content, idFallback);
 }
 
-async function writeTodoFile(filePath: string, todo: TodoRecord) {
-	await fs.writeFile(filePath, serializeTodo(todo), "utf8");
+/** Called under the store lock so validation and persistence see the same graph. */
+async function writeTodoFile(filePath: string, todo: TodoRecord): Promise<TodoRecord | { error: string }> {
+	const todos = await listTodos(path.dirname(filePath));
+	const error = validateTodoChange(todo, todos);
+	if (error) {
+		return { error };
+	}
+	// Readers must never observe partially written metadata as an unblocked task.
+	const temporaryPath = `${filePath}.${crypto.randomUUID()}.tmp`;
+	try {
+		await fs.writeFile(temporaryPath, serializeTodo(todo), { encoding: "utf8", flag: "wx", mode: 0o600 });
+		await fs.rename(temporaryPath, filePath);
+	} finally {
+		await fs.unlink(temporaryPath).catch(() => undefined);
+	}
+	const state = describeTodos([...todos.filter((item) => item.id !== todo.id), todo]).find((item) => item.id === todo.id)!;
+	return { ...todo, ...state };
 }
 
 async function generateTodoId(todosDir: string): Promise<string> {
@@ -1102,6 +1115,10 @@ async function acquireLock(
 	const lockPath = getLockPath(todosDir, id);
 	const now = Date.now();
 	const session = ctx.sessionManager.getSessionFile();
+	let label = `Todo ${displayTodoId(id)}`;
+	if (id === "graph") {
+		label = "Todo relationships";
+	}
 
 	for (let attempt = 0; attempt < 2; attempt += 1) {
 		try {
@@ -1130,23 +1147,38 @@ async function acquireLock(
 			if (lockAge <= LOCK_TTL_MS) {
 				const info = await readLockInfo(lockPath);
 				const owner = info?.session ? ` (session ${info.session})` : "";
-				return { error: `Todo ${displayTodoId(id)} is locked${owner}. Try again later.` };
+				return { error: `${label} is locked${owner}. Try again later.` };
 			}
 			if (!ctx.hasUI) {
-				return { error: `Todo ${displayTodoId(id)} lock is stale; rerun in interactive mode to steal it.` };
+				return { error: `${label} lock is stale; rerun in interactive mode to steal it.` };
 			}
 			const ok = await ctx.ui.confirm(
 				"Todo locked",
-				`Todo ${displayTodoId(id)} appears locked. Steal the lock?`,
+				`${label} appears locked. Steal the lock?`,
 			);
 			if (!ok) {
-				return { error: `Todo ${displayTodoId(id)} remains locked.` };
+				return { error: `${label} remains locked.` };
 			}
 			await fs.unlink(lockPath).catch(() => undefined);
 		}
 	}
 
-	return { error: `Failed to acquire lock for todo ${displayTodoId(id)}.` };
+	return { error: `Failed to acquire lock for ${label}.` };
+}
+
+/** Serialize graph reads and writes across sessions, not only changes to one task. */
+async function withTodoStoreLock<T>(todosDir: string, ctx: ExtensionContext, fn: () => Promise<T>): Promise<T | { error: string }> {
+	return withFileMutationQueue(getLockPath(todosDir, "graph"), async () => {
+		const lock = await acquireLock(todosDir, "graph", ctx);
+		if (typeof lock === "object") {
+			return lock;
+		}
+		try {
+			return await fn();
+		} finally {
+			await lock();
+		}
+	});
 }
 
 async function withTodoLock<T>(
@@ -1157,7 +1189,7 @@ async function withTodoLock<T>(
 ): Promise<T | { error: string }> {
 	const todoPath = getTodoPath(todosDir, id);
 	// ASVS 15.4.1: Pi serializes same-process mutations; the lock file coordinates other processes.
-	return withFileMutationQueue(todoPath, async () => {
+	return withTodoStoreLock(todosDir, ctx, () => withFileMutationQueue(todoPath, async () => {
 		const lock = await acquireLock(todosDir, id, ctx);
 		if (typeof lock === "object" && "error" in lock) {
 			return lock;
@@ -1167,7 +1199,7 @@ async function withTodoLock<T>(
 		} finally {
 			await lock();
 		}
-	});
+	}));
 }
 
 async function listTodos(todosDir: string): Promise<TodoFrontMatter[]> {
@@ -1187,21 +1219,13 @@ async function listTodos(todosDir: string): Promise<TodoFrontMatter[]> {
 			const content = await fs.readFile(filePath, "utf8");
 			const { frontMatter } = splitFrontMatter(content);
 			const parsed = parseFrontMatter(frontMatter, id);
-			todos.push({
-				id,
-				title: parsed.title,
-				tags: parsed.tags ?? [],
-				status: parsed.status,
-				created_at: parsed.created_at,
-				assigned_to_session: parsed.assigned_to_session,
-				project_id: parsed.project_id,
-			});
+			todos.push({ ...parsed, id });
 		} catch {
 			// ignore unreadable todo
 		}
 	}
 
-	return sortTodos(todos);
+	return describeTodos(sortTodos(todos));
 }
 
 function listTodosSync(todosDir: string): TodoFrontMatter[] {
@@ -1221,21 +1245,13 @@ function listTodosSync(todosDir: string): TodoFrontMatter[] {
 			const content = readFileSync(filePath, "utf8");
 			const { frontMatter } = splitFrontMatter(content);
 			const parsed = parseFrontMatter(frontMatter, id);
-			todos.push({
-				id,
-				title: parsed.title,
-				tags: parsed.tags ?? [],
-				status: parsed.status,
-				created_at: parsed.created_at,
-				assigned_to_session: parsed.assigned_to_session,
-				project_id: parsed.project_id,
-			});
+			todos.push({ ...parsed, id });
 		} catch {
 			// ignore
 		}
 	}
 
-	return sortTodos(todos);
+	return describeTodos(sortTodos(todos));
 }
 
 function getTodoTitle(todo: TodoFrontMatter): string {
@@ -1244,6 +1260,81 @@ function getTodoTitle(todo: TodoFrontMatter): string {
 
 function getTodoStatus(todo: TodoFrontMatter): string {
 	return todo.status || "open";
+}
+
+interface TodoFilter {
+	tags?: string[];
+	status?: string;
+	project_id?: string;
+	parent_id?: string;
+	ready?: boolean;
+	blocked?: boolean;
+	untagged?: boolean;
+}
+
+function validateTodoFilter(filter?: TodoFilter): string | undefined {
+	if (filter?.project_id !== undefined && !isValidProjectId(filter.project_id)) {
+		return "Invalid project id. Expected PROJECT-<hex>.";
+	}
+	if (filter?.parent_id !== undefined && "error" in validateTodoId(filter.parent_id)) {
+		return "Invalid parent todo id. Expected TODO-<hex>.";
+	}
+	return undefined;
+}
+
+function matchesTodoFilter(todo: TodoFrontMatter, filter?: TodoFilter): boolean {
+	if (!filter) {
+		return true;
+	}
+	if (filter.status && todo.status.toLowerCase() !== filter.status.toLowerCase()) {
+		return false;
+	}
+	if (filter.project_id && todo.project_id !== normalizeProjectId(filter.project_id)) {
+		return false;
+	}
+	if (filter.parent_id && todo.parent_id !== normalizeTodoId(filter.parent_id).toLowerCase()) {
+		return false;
+	}
+	if (filter.ready !== undefined && Boolean(todo.ready) !== filter.ready) {
+		return false;
+	}
+	if (filter.blocked !== undefined && Boolean(todo.blocked_by?.length) !== filter.blocked) {
+		return false;
+	}
+	if (filter.untagged && todo.tags.length > 0) {
+		return false;
+	}
+	const tags = new Set(todo.tags.map((tag) => tag.toLowerCase()));
+	return (filter.tags ?? []).every((tag) => tags.has(tag.toLowerCase()));
+}
+
+/** Normalize relationship parameters without letting them become filesystem paths. */
+function applyTodoRelationshipChanges(todo: TodoRecord, changes: { depends_on?: string[]; parent_id?: string; clear_parent?: boolean }): string | undefined {
+	if (changes.parent_id !== undefined && changes.clear_parent) {
+		return "parent_id and clear_parent cannot be used together.";
+	}
+	if (changes.depends_on !== undefined) {
+		const ids: string[] = [];
+		for (const rawId of changes.depends_on) {
+			const validated = validateTodoId(rawId);
+			if ("error" in validated) {
+				return validated.error;
+			}
+			ids.push(validated.id);
+		}
+		todo.depends_on = [...new Set(ids)];
+	}
+	if (changes.parent_id !== undefined) {
+		const validated = validateTodoId(changes.parent_id);
+		if ("error" in validated) {
+			return validated.error;
+		}
+		todo.parent_id = validated.id;
+	}
+	if (changes.clear_parent) {
+		delete todo.parent_id;
+	}
+	return undefined;
 }
 
 function formatAssignmentSuffix(todo: TodoFrontMatter): string {
@@ -1262,13 +1353,46 @@ function renderAssignmentSuffix(
 	return theme.fg(color, ` (assigned: ${todo.assigned_to_session}${suffix})`);
 }
 
+/** Compact relationship context shared by the selector, tool output, and search. */
+function formatTodoRelationshipSummary(todo: TodoFrontMatter): string {
+	const parts: string[] = [];
+	if (todo.parent_id) {
+		parts.push(`parent:${formatTodoId(todo.parent_id)}`);
+	}
+	if (todo.subtask_ids?.length) {
+		parts.push(`subtasks:${todo.subtasks_done ?? 0}/${todo.subtask_ids.length}`);
+	}
+	if (todo.blocked_by?.length) {
+		parts.push(`blocked by ${todo.blocked_by.map(formatTodoId).join(", ")}`);
+	} else if (todo.ready) {
+		parts.push("ready");
+	}
+	if (parts.length === 0) {
+		return "";
+	}
+	return ` (${parts.join("; ")})`;
+}
+
+function formatTodoRelationships(todo: TodoFrontMatter): string[] {
+	let parent = "none";
+	if (todo.parent_id) {
+		parent = formatTodoId(todo.parent_id);
+	}
+	return [
+		`Parent: ${parent}`,
+		`Depends on: ${(todo.depends_on ?? []).map(formatTodoId).join(", ") || "none"}`,
+		`Subtasks (${todo.subtasks_done ?? 0}/${todo.subtask_ids?.length ?? 0} done): ${(todo.subtask_ids ?? []).map(formatTodoId).join(", ") || "none"}`,
+		`Blocked by: ${(todo.blocked_by ?? []).map(formatTodoId).join(", ") || "none"}`,
+	];
+}
+
 function formatTodoHeading(todo: TodoFrontMatter): string {
 	const tagText = todo.tags.length ? ` [${todo.tags.join(", ")}]` : "";
 	let projectText = "";
 	if (todo.project_id) {
 		projectText = ` (${formatProjectId(todo.project_id)})`;
 	}
-	return `${formatTodoId(todo.id)} ${getTodoTitle(todo)}${tagText}${projectText}${formatAssignmentSuffix(todo)}`;
+	return `${formatTodoId(todo.id)} ${getTodoTitle(todo)}${tagText}${projectText}${formatAssignmentSuffix(todo)}${formatTodoRelationshipSummary(todo)}`;
 }
 
 function buildRefinePrompt(todoId: string, title: string): string {
@@ -1357,7 +1481,8 @@ function renderTodoHeading(theme: Theme, todo: TodoFrontMatter, currentSessionId
 		theme.fg(titleColor, getTodoTitle(todo)) +
 		tagText +
 		projectText +
-		assignmentText
+		assignmentText +
+		theme.fg("muted", formatTodoRelationshipSummary(todo))
 	);
 }
 
@@ -1419,6 +1544,7 @@ function renderTodoDetail(theme: Theme, todo: TodoRecord, expanded: boolean): st
 		theme.fg("muted", `Tags: ${tags}`),
 		theme.fg("muted", `Project: ${projectText}`),
 		theme.fg("muted", `Created: ${createdAt}`),
+		...formatTodoRelationships(todo).map((line) => theme.fg("muted", line)),
 		"",
 		theme.fg("muted", "Body:"),
 		...bodyLines.map((line) => theme.fg("text", `  ${line}`)),
@@ -1432,15 +1558,18 @@ function appendExpandHint(theme: Theme, text: string): string {
 }
 
 async function ensureTodoExists(filePath: string, id: string): Promise<TodoRecord | null> {
-	if (!existsSync(filePath)) return null;
-	return readTodoFile(filePath, id);
+	if (!existsSync(filePath)) {
+		return null;
+	}
+	const todo = await readTodoFile(filePath, id);
+	const state = (await listTodos(path.dirname(filePath))).find((item) => item.id === id);
+	return { ...todo, ...state };
 }
 
-async function appendTodoBody(filePath: string, todo: TodoRecord, text: string): Promise<TodoRecord> {
+async function appendTodoBody(filePath: string, todo: TodoRecord, text: string): Promise<TodoRecord | { error: string }> {
 	const spacer = todo.body.trim().length ? "\n\n" : "";
 	todo.body = `${todo.body.replace(/\s+$/, "")}${spacer}${text.trim()}\n`;
-	await writeTodoFile(filePath, todo);
-	return todo;
+	return writeTodoFile(filePath, todo);
 }
 
 async function updateTodoStatus(
@@ -1464,8 +1593,7 @@ async function updateTodoStatus(
 		if (!existing) return { error: `Todo ${displayTodoId(id)} not found` } as const;
 		existing.status = status;
 		clearAssignmentIfClosed(existing);
-		await writeTodoFile(filePath, existing);
-		return existing;
+		return writeTodoFile(filePath, existing);
 	});
 
 	if (typeof result === "object" && "error" in result) {
@@ -1498,6 +1626,9 @@ async function claimTodoAssignment(
 			return { error: `Todo ${displayTodoId(id)} is closed` } as const;
 		}
 		const assigned = existing.assigned_to_session;
+		if (existing.status.toLowerCase() === "review" || existing.blocked_by?.length) {
+			return { error: `Todo ${displayTodoId(id)} is not ready: review or unfinished prerequisites/subtasks.` };
+		}
 		if (assigned && assigned !== sessionId && !force) {
 			return {
 				error: `Todo ${displayTodoId(id)} is already assigned to session ${assigned}. Use force to override.`,
@@ -1505,7 +1636,7 @@ async function claimTodoAssignment(
 		}
 		if (assigned !== sessionId) {
 			existing.assigned_to_session = sessionId;
-			await writeTodoFile(filePath, existing);
+			return writeTodoFile(filePath, existing);
 		}
 		return existing;
 	});
@@ -1546,8 +1677,7 @@ async function releaseTodoAssignment(
 			} as const;
 		}
 		existing.assigned_to_session = undefined;
-		await writeTodoFile(filePath, existing);
-		return existing;
+		return writeTodoFile(filePath, existing);
 	});
 
 	if (typeof result === "object" && "error" in result) {
@@ -1575,6 +1705,10 @@ async function deleteTodo(
 	const result = await withTodoLock(todosDir, normalizedId, ctx, async () => {
 		const existing = await ensureTodoExists(filePath, normalizedId);
 		if (!existing) return { error: `Todo ${displayTodoId(id)} not found` } as const;
+		const references = (await listTodos(todosDir)).filter((todo) => todo.id !== normalizedId && (todo.parent_id === normalizedId || todo.depends_on?.includes(normalizedId)));
+		if (references.length > 0) {
+			return { error: `Todo is referenced by ${references.map((todo) => formatTodoId(todo.id)).join(", ")}. Remove those links before deleting it.` };
+		}
 		await fs.unlink(filePath);
 		return existing;
 	});
@@ -1600,7 +1734,7 @@ export default function todosExtension(pi: ExtensionAPI) {
 		}
 		if (dirExists) {
 			const settings = await readTodoSettings(todosDir);
-			await garbageCollectTodos(todosDir, settings);
+			await garbageCollectTodos(todosDir, settings, ctx);
 		}
 	});
 
@@ -1610,13 +1744,19 @@ export default function todosExtension(pi: ExtensionAPI) {
 		name: "todo",
 		label: "Todo",
 		description:
-			`Manage file-based todos in ${todosDirLabel} (list, list-all, get, create, update, append, delete, claim, release, batch-update). ` +
+			`Manage file-based todos in ${todosDirLabel} (list, list-all, ready, blocked, get, create, update, append, delete, claim, release, batch-update). ` +
 			"Title is the short summary; body is long-form markdown notes (update replaces, append adds). " +
 			"Todo ids are shown as TODO-<hex>; id parameters accept TODO-<hex> or the raw hex filename. " +
 			"Connect a todo to an existing project with project_id, or remove that connection with clear_project. " +
+			"Use depends_on for prerequisite todo IDs, parent_id for subtasks, and clear_parent to detach a subtask. depends_on replaces the list; [] clears it. " +
+			"ready lists open, unclaimed tasks with no blockers. blocked lists unfinished prerequisites and subtasks via blocked_by. " +
+			"Only done or legacy closed prerequisites unblock work; review does not. Parents wait for their subtasks but are never automatically completed. " +
+			"Relationships do not inherit project membership or a parent's explicit dependencies; link those explicitly when needed. " +
+			"Claims and completion reject blocked tasks. Referenced records are retained during cleanup; remove incoming links before deletion. " +
+			"Lists and batch-update accept filter tags/status/project_id/parent_id/ready/blocked/untagged. " +
 			"Claim tasks before working on them to avoid conflicts. " +
 			"When you finish work on a task, set status to 'review' (not 'done') so the owner can review it. Only set status to 'done' if explicitly asked to. " +
-			"batch-update applies changes to multiple todos at once. Target todos by ids, filter (by tags/status/project_id/untagged), or both. " +
+			"batch-update applies changes to multiple todos at once. Target todos by ids, filter, or both. " +
 			"Use add_tags/remove_tags for incremental tag changes, or tags to replace all tags. " +
 			"Example: batch-update with filter {status: 'open'} and add_tags ['sprint-3'] tags all open todos.", 
 		parameters: TodoParams,
@@ -1626,25 +1766,30 @@ export default function todosExtension(pi: ExtensionAPI) {
 			const action: TodoAction = params.action;
 
 			switch (action) {
-				case "list": {
-					const todos = await listTodos(todosDir);
-					// Filter out closed/done todos for normal list view
-					const activeTodos = todos.filter((todo) => !isTodoClosed(todo.status));
-					const { assignedTodos, openTodos } = splitTodosByAssignment(activeTodos);
-					const listedTodos = [...assignedTodos, ...openTodos];
-					const currentSessionId = ctx.sessionManager.getSessionId();
-					return {
-						content: [{ type: "text", text: serializeTodoListForAgent(listedTodos) }],
-						details: { action: "list", todos: listedTodos, currentSessionId },
-					};
-				}
-
-				case "list-all": {
-					const todos = await listTodos(todosDir);
+				case "list":
+				case "list-all":
+				case "ready":
+				case "blocked": {
+					const error = validateTodoFilter(params.filter);
+					if (error) {
+						return { content: [{ type: "text", text: error }], details: { action, todos: [], error } };
+					}
+					const todos = (await listTodos(todosDir)).filter((todo) => {
+						if (action !== "list-all" && isTodoClosed(todo.status)) {
+							return false;
+						}
+						if (action === "ready" && !todo.ready) {
+							return false;
+						}
+						if (action === "blocked" && !todo.blocked_by?.length) {
+							return false;
+						}
+						return matchesTodoFilter(todo, params.filter);
+					});
 					const currentSessionId = ctx.sessionManager.getSessionId();
 					return {
 						content: [{ type: "text", text: serializeTodoListForAgent(todos) }],
-						details: { action: "list-all", todos, currentSessionId },
+						details: { action, todos, currentSessionId },
 					};
 				}
 
@@ -1710,8 +1855,11 @@ export default function todosExtension(pi: ExtensionAPI) {
 					};
 
 					const result = await withTodoLock(todosDir, id, ctx, async () => {
-						await writeTodoFile(filePath, todo);
-						return todo;
+						const error = applyTodoRelationshipChanges(todo, params);
+						if (error) {
+							return { error };
+						}
+						return writeTodoFile(filePath, todo);
 					});
 
 					if (typeof result === "object" && "error" in result) {
@@ -1722,8 +1870,8 @@ export default function todosExtension(pi: ExtensionAPI) {
 					}
 
 					return {
-						content: [{ type: "text", text: serializeTodoForAgent(todo) }],
-						details: { action: "create", todo },
+						content: [{ type: "text", text: serializeTodoForAgent(result) }],
+						details: { action: "create", todo: result },
 					};
 				}
 
@@ -1781,8 +1929,11 @@ export default function todosExtension(pi: ExtensionAPI) {
 						if (!existing.created_at) existing.created_at = new Date().toISOString();
 						clearAssignmentIfClosed(existing);
 
-						await writeTodoFile(filePath, existing);
-						return existing;
+						const error = applyTodoRelationshipChanges(existing, params);
+						if (error) {
+							return { error };
+						}
+						return writeTodoFile(filePath, existing);
 					});
 
 					if (typeof result === "object" && "error" in result) {
@@ -1971,40 +2122,14 @@ export default function todosExtension(pi: ExtensionAPI) {
 					}
 
 					// Collect filter matches
-					const filter = params.filter as { tags?: string[]; status?: string; project_id?: string; untagged?: boolean } | undefined;
+					const filter = params.filter;
+					const filterError = validateTodoFilter(filter);
+					if (filterError) {
+						return { content: [{ type: "text", text: filterError }], details: { action, updated: [], skipped, error: filterError } };
+					}
 					if (filter) {
-						if (filter.project_id && !isValidProjectId(filter.project_id)) {
-							return {
-								content: [{ type: "text", text: "Invalid project id. Expected PROJECT-<hex>." }],
-								details: { action: "batch-update", updated: [], skipped, error: "invalid project id" },
-							};
-						}
-						let filterProjectId: string | undefined;
-						if (filter.project_id) {
-							filterProjectId = normalizeProjectId(filter.project_id);
-						}
-						const allTodos = await listTodos(todosDir);
-						for (const todo of allTodos) {
-							let matches = true;
-							if (filter.status && todo.status.toLowerCase() !== filter.status.toLowerCase()) {
-								matches = false;
-							}
-							if (filterProjectId && todo.project_id !== filterProjectId) {
-								matches = false;
-							}
-							if (filter.tags && filter.tags.length > 0) {
-								const todoTagsLower = todo.tags.map(t => t.toLowerCase());
-								for (const requiredTag of filter.tags) {
-									if (!todoTagsLower.includes(requiredTag.toLowerCase())) {
-										matches = false;
-										break;
-									}
-								}
-							}
-							if (filter.untagged && todo.tags.length > 0) {
-								matches = false;
-							}
-							if (matches) {
+						for (const todo of await listTodos(todosDir)) {
+							if (matchesTodoFilter(todo, filter)) {
 								targetIds.add(todo.id);
 							}
 						}
@@ -2054,8 +2179,11 @@ export default function todosExtension(pi: ExtensionAPI) {
 							}
 
 							clearAssignmentIfClosed(existing);
-							await writeTodoFile(filePath, existing);
-							return existing;
+							const error = applyTodoRelationshipChanges(existing, params);
+							if (error) {
+								return { error };
+							}
+							return writeTodoFile(filePath, existing);
 						});
 
 						if (lockResult && typeof lockResult === "object" && "error" in lockResult) {
@@ -2070,6 +2198,12 @@ export default function todosExtension(pi: ExtensionAPI) {
 								created_at: rec.created_at,
 								assigned_to_session: rec.assigned_to_session,
 								project_id: rec.project_id,
+								depends_on: rec.depends_on,
+								parent_id: rec.parent_id,
+								blocked_by: rec.blocked_by,
+								subtask_ids: rec.subtask_ids,
+								subtasks_done: rec.subtasks_done,
+								ready: rec.ready,
 							});
 						}
 					}
@@ -2086,6 +2220,12 @@ export default function todosExtension(pi: ExtensionAPI) {
 								tags: t.tags,
 								status: t.status,
 								project_id: projectId,
+								depends_on: t.depends_on,
+								parent_id: t.parent_id,
+								blocked_by: t.blocked_by,
+								subtask_ids: t.subtask_ids,
+								subtasks_done: t.subtasks_done,
+								ready: t.ready,
 							};
 						}),
 						skipped: skipped.map(s => ({ id: formatTodoId(s.id), reason: s.reason })),
@@ -2153,7 +2293,7 @@ export default function todosExtension(pi: ExtensionAPI) {
 				return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
 			}
 
-			if (details.action === "list" || details.action === "list-all") {
+			if (details.action === "list" || details.action === "list-all" || details.action === "ready" || details.action === "blocked") {
 				let text = renderTodoList(theme, details.todos, expanded, details.currentSessionId);
 				if (!expanded) {
 					const { closedTodos } = splitTodosByAssignment(details.todos);

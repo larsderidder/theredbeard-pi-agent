@@ -14,13 +14,14 @@
     "pi-extension"
   ],
   "scripts": {
-    "test": "npm run typecheck && npm run test:tool-permissions && npm run test:kubectl && npm run test:lazy-tools && npm run test:file-mutations && npm run test:credential-scrubber && npm run test:fork-terminal && npm run test:move-session && npm run test:projects && npm run test:recap && npm run test:opengrep",
+    "test": "npm run typecheck && npm run test:tool-permissions && npm run test:kubectl && npm run test:lazy-tools && npm run test:file-mutations && npm run test:credential-scrubber && npm run test:fork-terminal && npm run test:move-session && npm run test:projects && npm run test:todos && npm run test:recap && npm run test:opengrep",
     "test:file-mutations": "node scripts/test-file-mutations.mjs",
     "test:credential-scrubber": "node scripts/test-credential-scrubber.mjs",
     "test:fork-terminal": "node scripts/test-fork-terminal.mjs",
     "test:move-session": "node scripts/test-move-session.mjs",
     "test:lazy-tools": "node scripts/test-lazy-tools.mjs",
     "test:projects": "node scripts/test-projects.mjs",
+    "test:todos": "node scripts/test-todos.mjs",
     "test:recap": "node scripts/test-recap.mjs",
     "test:opengrep": "node scripts/test-opengrep.mjs",
     "test:opengrep:live": "node scripts/test-opengrep.mjs --live",
