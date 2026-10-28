@@ -677,10 +677,33 @@ function auditBlocked(auditLog: string, command: string, context: string | undef
   appendAudit(auditLog, { command, context, allowed: false, blocked: true, reason, ...details });
 }
 
+/** Python generator variables are not shell aliases; only mask a literal stdin script. */
+function maskPythonHeredoc(command: string): string {
+  const header = /^[ \t]*(?:\/[A-Za-z0-9_./-]+\/)?python(?:\d+(?:\.\d+)*)?[ \t]+-[ \t]+<<(-?)[ \t]*(?:'([A-Za-z_][A-Za-z0-9_]*)'|"([A-Za-z_][A-Za-z0-9_]*)")[ \t]*\n/.exec(command);
+  if (!header) {
+    return command;
+  }
+  const delimiter = header[2] ?? header[3];
+  const lines = command.slice(header[0].length).split("\n");
+  const end = lines.findIndex((line) => {
+    if (header[1] === "-") {
+      return line.replace(/^\t+/, "") === delimiter;
+    }
+    return line === delimiter;
+  });
+  if (end < 0) {
+    return command;
+  }
+  return header[0] + "\n".repeat(end + 1) + lines.slice(end + 1).join("\n");
+}
+
 function looksLikeRawKubectl(command: string): boolean {
-  const executable = String.raw`(?:kubectl|k|(?:\./|/|[A-Za-z0-9_./-]*/)kubectl)`;
+  const executable = String.raw`(?:kubectl|(?:\./|/|[A-Za-z0-9_./-]*/)kubectl)`;
   const prefix = String.raw`(?:^|[;&|({]\s*|\b(?:sudo|doas|nohup)\s+|\benv\s+(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*)`;
-  return new RegExp(`${prefix}${executable}(?:\\s|$)`, "m").test(command);
+  if (new RegExp(`${prefix}${executable}(?:\\s|$)`, "m").test(command)) {
+    return true;
+  }
+  return new RegExp(`${prefix}k(?:\\s|$)`, "m").test(maskPythonHeredoc(command));
 }
 
 function maskObject(value: unknown): unknown {

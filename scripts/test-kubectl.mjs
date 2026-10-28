@@ -106,6 +106,36 @@ try {
 	const handler = guard.handlers.get("tool_call");
 	assert.equal((await handler({ toolName: "bash", input: { command: "kubectl get pods" } })).block, true);
 	assert.equal(await handler({ toolName: "bash", input: { command: "git status --short" } }), undefined);
+	for (const command of [
+		"python3 - <<'PY'\nprint(dict(k for k in []))\nPY",
+		'python3 - <<"PY"\nprint(dict(k for k in []))\nPY',
+		"python3 - <<-'PY'\n\tprint(dict(k for k in []))\n\tPY",
+		"/usr/bin/python3 - <<'PY'\nprint(dict(k for k in []))\nPY",
+		"python3 - <<'PY'\nprint(dict(k for k in []))\nPY\ngit status --short",
+	]) {
+		assert.equal(await handler({ toolName: "bash", input: { command } }), undefined, command);
+	}
+	for (const command of [
+		"k get pods",
+		"(k get pods)",
+		"sudo kubectl get pods",
+		"python3 - <<'PY'\nprint(dict(k for k in []))\nPY\nk get pods",
+		"python3 - <<'PY'\nkubectl get pods\nPY",
+		"python3 - <<PY\n$(k get pods)\nPY",
+		"echo \"start\npython3 - <<'PY'\n$(k get pods)\nPY\n\"",
+		"cat <<'PY'\n(k for k in [])\nPY\nkubectl get pods",
+		"cat <<'PY'; kubectl get pods\n(k for k in [])\nPY",
+		"cat <<PY\n$(kubectl get pods)\nPY",
+		"cat <<FIRST <<'SECOND'\n$(kubectl get pods)\nFIRST\nliteral\nSECOND",
+		"cat <<\\FIRST <<'SECOND'\nliteral\nFIRST\nliteral\nSECOND\nkubectl get pods",
+		"bash <<'SH'\nkubectl get pods\nSH",
+		"env bash <<'SH'\nkubectl get pods\nSH",
+		"/bin/sh <<'SH'\nk get pods\nSH",
+		"echo \"<<'PY'\"\nkubectl get pods\nPY",
+		"# <<'PY'\nkubectl get pods\nPY",
+	]) {
+		assert.equal((await handler({ toolName: "bash", input: { command } })).block, true, command);
+	}
 	console.log("kubectl tests passed");
 } finally {
 	mock.restoreAll();
