@@ -61,7 +61,7 @@ Security routing keeps `code-security`, `llm-security`, and `security-scan` mode
 
 ## Internal libraries
 
-`theredbeard-pi-agent/tool-permissions` exports `createApprovalGate()` for extension tools that need interactive mutation approval. It provides once, current agent run, and timed grants keyed by a caller-defined scope. It can reject or serialize concurrent operations, fails closed without UI, resets grants with session lifecycle events, and emits optional audit events.
+`theredbeard-pi-agent/tool-permissions` exports `createApprovalGate()` for extension tools that need interactive mutation approval. It provides once, current agent run, timed, and current pi session grants keyed by a caller-defined scope. Session grants survive agent runs but are cleared on session shutdown, session replacement, or extension reload; they are not persisted when resuming a session. The gate can reject or serialize concurrent operations, fails closed without UI when no matching grant exists, and emits optional audit events.
 
 Risk classification remains in the consuming extension. Callers must keep an allowed decision's lease until execution finishes and call `release()` in a `finally` block.
 

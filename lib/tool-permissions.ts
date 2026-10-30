@@ -12,7 +12,7 @@ export interface ApprovalLifecycle {
 	on(event: "agent_end", handler: () => unknown): void;
 }
 
-export type ApprovalScope = "turn" | "time";
+export type ApprovalScope = "turn" | "time" | "session";
 export type ApprovalConcurrency = "queue" | "reject";
 export type ApprovalConfirmation = "approved-once" | "approved-with-grant" | "approval-grant";
 export type ApprovalDenialKind = "busy" | "no-ui" | "user-denied";
@@ -101,6 +101,7 @@ function approvalChoices(scopeLabel: string, duration: string) {
 		once: "Allow once",
 		turn: `Allow ${scopeLabel} this turn`,
 		time: `Allow ${scopeLabel} for ${duration}`,
+		session: `Allow ${scopeLabel} for this pi session`,
 		deny: "Deny",
 	} as const;
 }
@@ -115,6 +116,7 @@ export function formatApprovalPrompt(request: ApprovalRequest, durationMs = DEFA
 		"- once: only this operation",
 		`- this turn: confirmed operations for ${request.scopeLabel} until the current agent run ends`,
 		`- ${duration}: confirmed operations for ${request.scopeLabel} until the timer expires`,
+		`- this pi session: confirmed operations for ${request.scopeLabel} until the session ends or extensions reload`,
 		"",
 		request.question,
 	].join("\n");
@@ -160,6 +162,9 @@ export function createApprovalGate(pi: ApprovalLifecycle, options: ApprovalGateO
 	function pruneGrants(): void {
 		const timestamp = now();
 		grants = grants.filter((grant) => {
+			if (grant.scope === "session") {
+				return true;
+			}
 			if (grant.scope === "turn") {
 				return grant.runId === currentAgentRunId;
 			}
@@ -178,6 +183,8 @@ export function createApprovalGate(pi: ApprovalLifecycle, options: ApprovalGateO
 		if (scope === "time") {
 			expiresAt = now() + durationMs;
 			label = durationLabel(durationMs);
+		} else if (scope === "session") {
+			label = "this pi session";
 		}
 		const grant: ApprovalGrant = {
 			key,
@@ -290,6 +297,7 @@ export function createApprovalGate(pi: ApprovalLifecycle, options: ApprovalGateO
 				labels.once,
 				labels.turn,
 				labels.time,
+				labels.session,
 				labels.deny,
 			]);
 		} catch (error) {
@@ -315,6 +323,8 @@ export function createApprovalGate(pi: ApprovalLifecycle, options: ApprovalGateO
 			grant = addGrant("turn", request.key);
 		} else if (choice === labels.time) {
 			grant = addGrant("time", request.key);
+		} else if (choice === labels.session) {
+			grant = addGrant("session", request.key);
 		}
 
 		await emit({

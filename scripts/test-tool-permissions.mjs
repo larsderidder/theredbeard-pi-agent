@@ -16,11 +16,14 @@ function createPi() {
 
 function createContext(choices = []) {
 	let selectCalls = 0;
+	const dialogs = [];
 	return {
+		dialogs,
 		context: {
 			hasUI: true,
 			ui: {
-				async select() {
+				async select(title, options) {
+					dialogs.push({ title, options });
 					selectCalls += 1;
 					return choices.shift();
 				},
@@ -103,6 +106,72 @@ const request = {
 	assert.equal(expired.confirmation, "approved-once");
 	assert.equal(ctx.selectCalls(), 2);
 	expired.release();
+}
+
+// Session grants keep their scope across runs, without a timer.
+{
+	let now = 1_000;
+	const pi = createPi();
+	const events = [];
+	const gate = createApprovalGate(pi, {
+		now: () => now,
+		onEvent(event) {
+			events.push(event);
+		},
+	});
+	const ctx = createContext(["Allow this context for this pi session", "Deny"]);
+
+	await pi.handlers.get("session_start")();
+	await pi.handlers.get("agent_start")();
+	const first = await gate.authorize(ctx.context, request);
+	assert.equal(first.allowed, true);
+	assert.equal(first.confirmation, "approved-with-grant");
+	assert.equal(first.grant?.scope, "session");
+	assert.equal(first.grant?.label, "this pi session");
+	assert.ok(ctx.dialogs[0].options.includes("Allow this context for this pi session"));
+	assert.match(ctx.dialogs[0].title, /this pi session: confirmed operations for this context/);
+	first.release();
+
+	await pi.handlers.get("agent_end")();
+	now += 24 * 60 * 60 * 1_000;
+	await pi.handlers.get("agent_start")();
+	const reused = await gate.authorize(ctx.context, request);
+	assert.equal(reused.allowed, true);
+	assert.equal(reused.confirmation, "approval-grant");
+	assert.equal(reused.grant?.scope, "session");
+	assert.equal(ctx.selectCalls(), 1);
+	reused.release();
+	assert.deepEqual(events.map((event) => [event.type, event.approvalScope]), [
+		["prompted", undefined],
+		["approved", "session"],
+		["grant-used", "session"],
+	]);
+
+	const otherScope = await gate.authorize(ctx.context, { ...request, key: "cluster:staging" });
+	assert.equal(otherScope.allowed, false);
+	assert.equal(otherScope.kind, "user-denied");
+	assert.equal(ctx.selectCalls(), 2);
+}
+
+// Session lifecycle boundaries clear approvals, and separate gates never share them.
+for (const event of ["session_start", "session_shutdown"]) {
+	const pi = createPi();
+	const gate = createApprovalGate(pi);
+	const ctx = createContext(["Allow this context for this pi session", "Deny"]);
+	const first = await gate.authorize(ctx.context, request);
+	assert.equal(first.allowed, true);
+	first.release();
+
+	const otherGate = createApprovalGate(createPi());
+	const isolated = await otherGate.authorize({ hasUI: false, ui: {} }, request);
+	assert.equal(isolated.allowed, false);
+	assert.equal(isolated.kind, "no-ui");
+
+	await pi.handlers.get(event)();
+	const afterReset = await gate.authorize(ctx.context, request);
+	assert.equal(afterReset.allowed, false);
+	assert.equal(afterReset.kind, "user-denied");
+	assert.equal(ctx.selectCalls(), 2);
 }
 
 {
