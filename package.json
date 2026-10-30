@@ -14,7 +14,7 @@
     "pi-extension"
   ],
   "scripts": {
-    "test": "npm run typecheck && npm run test:tool-permissions && npm run test:kubectl && npm run test:lazy-tools && npm run test:file-mutations && npm run test:credential-scrubber && npm run test:fork-terminal && npm run test:move-session && npm run test:projects && npm run test:todos && npm run test:prompt-editor && npm run test:recap && npm run test:opengrep",
+    "test": "npm run typecheck && npm run test:tool-permissions && npm run test:kubectl && npm run test:lazy-tools && npm run test:file-mutations && npm run test:credential-scrubber && npm run test:fork-terminal && npm run test:move-session && npm run test:projects && npm run test:todos && npm run test:prompt-editor && npm run test:recap && npm run test:opengrep && npm run test:notify",
     "test:file-mutations": "node scripts/test-file-mutations.mjs",
     "test:credential-scrubber": "node scripts/test-credential-scrubber.mjs",
     "test:fork-terminal": "node scripts/test-fork-terminal.mjs",
@@ -28,6 +28,7 @@
     "test:opengrep:live": "node scripts/test-opengrep.mjs --live",
     "test:search-security": "node scripts/test-search-security.mjs",
     "test:search-security:live": "node scripts/test-search-security.mjs --live",
+    "test:notify": "node scripts/test-notify.mjs",
     "test:tool-permissions": "node scripts/test-tool-permissions.mjs",
     "test:kubectl": "node scripts/test-kubectl.mjs",
     "typecheck": "tsc --noEmit"

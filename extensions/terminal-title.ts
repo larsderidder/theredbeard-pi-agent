@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { readAttentionAlerts } from "../lib/attention.ts";
 
 const MAX_TITLE_LENGTH = 160;
 
@@ -18,6 +19,9 @@ function buildTitle(ctx: ExtensionContext, status: SessionStatus): string {
 	let statusLabel = "… working";
 	if (status === "ready") {
 		statusLabel = "● ready";
+		if (readAttentionAlerts(ctx.sessionManager.getEntries()).some((alert) => !alert.acknowledged)) {
+			statusLabel = "⚠ attention";
+		}
 	}
 
 	let title = `${statusLabel} - π`;
@@ -34,6 +38,17 @@ function buildTitle(ctx: ExtensionContext, status: SessionStatus): string {
 export default function terminalTitleExtension(pi: ExtensionAPI) {
 	let sessionGeneration = 0;
 	let pendingUpdate: ReturnType<typeof setTimeout> | undefined;
+	let currentContext: ExtensionContext | undefined;
+
+	pi.events.on("attention:changed", () => {
+		if (currentContext) {
+			let status: SessionStatus = "working";
+			if (currentContext.isIdle()) {
+				status = "ready";
+			}
+			scheduleTitle(currentContext, status);
+		}
+	});
 
 	function clearPendingUpdate(): void {
 		if (pendingUpdate) {
@@ -60,6 +75,7 @@ export default function terminalTitleExtension(pi: ExtensionAPI) {
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
+		currentContext = ctx;
 		sessionGeneration += 1;
 		// Pi sets its default title after session_start, so apply ours on the next tick.
 		scheduleTitle(ctx, "ready");
@@ -80,6 +96,7 @@ export default function terminalTitleExtension(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async () => {
+		currentContext = undefined;
 		sessionGeneration += 1;
 		clearPendingUpdate();
 	});
