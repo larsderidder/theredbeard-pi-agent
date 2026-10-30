@@ -12,6 +12,7 @@ const AlertSchema = Type.Object({
 	detail: AttentionText,
 	acknowledged: Type.Boolean(),
 	notified: Type.Boolean(),
+	escalations: Type.Optional(Type.Array(AttentionId)),
 });
 const AlertsSchema = Type.Array(AlertSchema);
 
@@ -22,7 +23,13 @@ export function readAttentionAlerts(entries: readonly SessionEntry[]): Attention
 	for (let index = entries.length - 1; index >= 0; index--) {
 		const entry = entries[index];
 		if (entry.type === "custom" && entry.customType === ATTENTION_ENTRY && Check(AlertsSchema, entry.data)) {
-			return entry.data.map((alert) => ({ ...alert }));
+			return entry.data.map((alert) => {
+				const copy = { ...alert };
+				if (alert.escalations) {
+					copy.escalations = [...alert.escalations];
+				}
+				return copy;
+			});
 		}
 	}
 	return [];

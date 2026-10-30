@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { SessionManager, initTheme } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url, { interopDefault: true });
@@ -115,6 +116,30 @@ function harness(manager = SessionManager.inMemory("/test/project")) {
 	assert.equal(h.alerts()[0].notified, false);
 }
 
+// Updating prose while a popup is in flight cannot cause a repeat; a new escalation still can.
+for (const escalate of [false, true]) {
+	const h = harness();
+	await h.tool("raise_attention", issue);
+	let release;
+	h.delayDelivery(new Promise((resolve) => { release = resolve; }));
+	const settling = h.settle();
+	const update = { ...issue, title: "Production recovery is still incomplete" };
+	if (escalate) {
+		update.escalation = "new-outage";
+	}
+	await h.tool("raise_attention", update);
+	release();
+	await settling;
+	assert.equal(h.alerts()[0].notified, !escalate);
+	h.delayDelivery(undefined);
+	await h.settle();
+	let expected = 1;
+	if (escalate) {
+		expected = 2;
+	}
+	assert.equal(h.notifications.filter((notice) => notice.critical).length, expected);
+}
+
 // A low-level run ending is not sufficient: queued work and retries can still follow.
 {
 	const h = harness();
@@ -132,8 +157,9 @@ function harness(manager = SessionManager.inMemory("/test/project")) {
 	await h.settle();
 	assert.equal(h.notifications.length, 1);
 	assert.equal(h.notifications[0].critical, true);
-	assert.match(h.notifications[0].title, /Production remains degraded/);
-	assert.match(h.notifications[0].body, /operator intervention/);
+	assert.match(h.notifications[0].title, /project/);
+	assert.match(h.notifications[0].body, /Production remains degraded/);
+	assert.doesNotMatch(h.notifications[0].body, /operator intervention/);
 	assert.match(h.titles.at(-1), /attention/);
 	assert.match(h.statuses.get("attention"), /needs attention/);
 	assert.equal(h.alerts()[0].notified, true);
@@ -153,16 +179,42 @@ function harness(manager = SessionManager.inMemory("/test/project")) {
 	assert.match(h.titles.at(-1), /ready/);
 	await h.commands.get("attention").handler("", h.ctx);
 	assert.match(h.notices.at(-1).text, /acknowledged, unresolved/);
-	const context = await h.fire("before_agent_start");
-	assert.match(context[0].message.content, /production-health/);
-	assert.match(context[0].message.content, /seen, not fixed/);
+	assert.deepEqual(await h.fire("before_agent_start"), []);
+	const status = await h.tool("list_attention", {});
+	assert.match(status.content[0].text, /production-health/);
+	assert.equal(status.details.alerts[0].acknowledged, true);
 
-	// Materially changed findings rearm even an acknowledged alert.
-	await h.tool("raise_attention", { ...issue, detail: "Both replicas are now unavailable." });
+	// Updated wording or progress never rearms an acknowledged issue.
+	await h.tool("raise_attention", { ...issue, title: "Production recovery is incomplete", detail: "Only the worker replica remains unavailable." });
+	assert.equal(h.alerts()[0].acknowledged, true);
+	assert.equal(h.alerts()[0].notified, true);
 	await h.settle();
-	assert.equal(h.notifications.length, 2);
+	assert.equal(h.notifications.filter((notice) => notice.critical).length, 1);
+
+	// New evidence of deterioration requires an explicit, stable escalation ID.
+	await h.tool("raise_attention", { ...issue, detail: "Both replicas are now unavailable.", escalation: "both-replicas-down" });
+	await h.settle();
+	assert.equal(h.notifications.filter((notice) => notice.critical).length, 2);
 	assert.equal(h.alerts()[0].acknowledged, false);
-	assert.match(h.notifications[1].body, /Both replicas/);
+	assert.deepEqual(h.alerts()[0].escalations, ["both-replicas-down"]);
+
+	// Rewording the same escalation must not send another alert, even after acknowledgement.
+	await h.commands.get("attention").handler("ack all", h.ctx);
+	await h.tool("raise_attention", { ...issue, detail: "Neither replica is available.", escalation: "both-replicas-down" });
+	await h.settle();
+	assert.equal(h.notifications.filter((notice) => notice.critical).length, 2);
+	assert.equal(h.alerts()[0].acknowledged, true);
+
+	// A later deterioration does not erase the deduplication history of earlier events.
+	await h.tool("raise_attention", { ...issue, detail: "The recovery snapshot is also unusable.", escalation: "recovery-snapshot-corrupt" });
+	await h.settle();
+	await h.commands.get("attention").handler("ack all", h.ctx);
+	await h.tool("raise_attention", { ...issue, escalation: "both-replicas-down" });
+	await h.settle();
+	assert.equal(h.notifications.filter((notice) => notice.critical).length, 3);
+	assert.equal(h.alerts()[0].acknowledged, true);
+	h.alerts()[0].escalations.push("unpersisted-change");
+	assert.deepEqual(h.alerts()[0].escalations, ["both-replicas-down", "recovery-snapshot-corrupt"]);
 	await h.fire("session_shutdown");
 }
 
@@ -203,7 +255,8 @@ function harness(manager = SessionManager.inMemory("/test/project")) {
 	await h.settle();
 	assert.equal(h.notifications.length, 1);
 	assert.match(h.notifications[0].body, /Production remains degraded/);
-	assert.match(h.notifications[0].body, /Backup integrity/);
+	assert.match(h.notifications[0].body, /1 more/);
+	assert.doesNotMatch(h.notifications[0].body, /Backup integrity|operator intervention/);
 	await h.commands.get("attention").handler("ack production-health", h.ctx);
 	assert.match(h.statuses.get("attention"), /1 needs attention/);
 	await h.commands.get("attention").handler("ack missing", h.ctx);
@@ -212,6 +265,79 @@ function harness(manager = SessionManager.inMemory("/test/project")) {
 	assert.ok(h.alerts().every((alert) => alert.acknowledged));
 	await assert.rejects(h.tool("resolve_attention", { id: "missing" }), /No attention record/);
 	await assert.rejects(h.tool("raise_attention", { ...issue, title: "\x07\n " }), /meaningful/);
+}
+
+// Progress on an unacknowledged incident updates its record without another popup.
+{
+	const h = harness();
+	await h.tool("raise_attention", issue);
+	await h.settle();
+	await h.tool("raise_attention", { ...issue, title: "Production worker remains unavailable", detail: "The API recovered; the worker still needs repair." });
+	assert.equal(h.alerts()[0].notified, true);
+	assert.equal(h.alerts()[0].acknowledged, false);
+	await h.settle();
+	assert.equal(h.notifications.length, 1);
+	assert.match(h.statuses.get("attention"), /needs attention/);
+
+	// A distinct new incident gets an alert without repeating old incident text.
+	await h.tool("raise_attention", { ...issue, id: "backup-failed", title: "Production backup failed" });
+	await h.settle();
+	assert.equal(h.notifications.length, 2);
+	assert.match(h.notifications[1].body, /Production backup failed/);
+	assert.doesNotMatch(h.notifications[1].body, /worker remains unavailable/);
+}
+
+// Old persisted reminders stay on disk but no longer reach model context or multiply.
+{
+	const h = harness();
+	const user = { role: "user", content: "Continue the task", timestamp: 1 };
+	const reminder = { role: "custom", customType: "attention-state", content: "Old unresolved issue", display: false, timestamp: 2 };
+	const unrelated = { ...reminder, customType: "other-extension" };
+	const messages = [user, reminder, unrelated, { ...reminder, timestamp: 3 }];
+	for (let run = 0; run < 3; run++) {
+		assert.deepEqual(await h.fire("before_agent_start"), []);
+		const [result] = await h.fire("context", { messages });
+		assert.deepEqual(result.messages, [user, unrelated]);
+	}
+	assert.equal(messages.length, 4);
+	assert.equal(h.ctx.sessionManager.getEntries().length, 0);
+}
+
+// Both ordinary and critical notifications stay short, including long project paths and Unicode.
+{
+	const h = harness();
+	h.ctx.cwd = `/home/lars/workspace/${"日本語🚨".repeat(40)}`;
+	const title = "Production still needs repair ".repeat(4).trim();
+	const detail = "Long diagnostic text. ".repeat(40).trim();
+	await h.tool("raise_attention", { ...issue, title, detail });
+	await h.settle();
+	const notice = h.notifications[0];
+	assert.ok(visibleWidth(notice.title) <= 60);
+	assert.ok(visibleWidth(notice.body) <= 140);
+	assert.doesNotMatch(notice.title, /home\/lars\/workspace/);
+	assert.match(notice.body, /\/attention/);
+	assert.doesNotMatch(notice.body, /diagnostic text/);
+	await h.commands.get("attention").handler("", h.ctx);
+	assert.ok(h.notices.at(-1).text.includes(detail));
+	await h.tool("resolve_attention", { id: issue.id });
+	await h.fire("agent_end", { messages: [{ role: "assistant", content: "Recovered 🚨 日本語 ".repeat(50) }] });
+	await h.settle();
+	assert.ok(visibleWidth(h.notifications.at(-1).title) <= 60);
+	assert.ok(visibleWidth(h.notifications.at(-1).body) <= 140);
+}
+
+// Existing records from before escalation IDs were introduced keep their seen/notified state.
+{
+	const manager = SessionManager.inMemory("/test/project");
+	manager.appendCustomEntry(ATTENTION_ENTRY, [{ ...issue, acknowledged: true, notified: true }]);
+	const h = harness(manager);
+	await h.fire("session_start");
+	await h.tool("raise_attention", { ...issue, title: "Repair is progressing" });
+	await h.settle();
+	assert.equal(h.alerts()[0].acknowledged, true);
+	assert.equal(h.alerts()[0].notified, true);
+	assert.equal(h.notifications.filter((notice) => notice.critical).length, 0);
+	await h.fire("session_shutdown");
 }
 
 // Headless and RPC sessions must not write terminal escape sequences or send desktop popups.
@@ -248,6 +374,17 @@ for (const mode of ["print", "json", "rpc"]) {
 		reopened.branch(root);
 		await resumed.fire("session_tree");
 		assert.equal(resumed.alerts()[0].acknowledged, true);
+		await resumed.tool("raise_attention", { ...issue, title: "Awaiting worker recovery" });
+		assert.equal(resumed.alerts()[0].acknowledged, true);
+		assert.equal(resumed.alerts()[0].notified, true);
+		await resumed.tool("raise_attention", { ...issue, escalation: "all-replicas-down", detail: "All replicas are down." });
+		await resumed.settle();
+		const afterReload = harness(SessionManager.open(manager.getSessionFile()));
+		await afterReload.fire("session_start");
+		await afterReload.tool("raise_attention", { ...issue, escalation: "all-replicas-down", detail: "Every replica is unavailable." });
+		await afterReload.settle();
+		assert.equal(afterReload.notifications.length, 0);
+		await afterReload.fire("session_shutdown");
 		await resumed.tool("resolve_attention", { id: issue.id });
 		assert.deepEqual(readAttentionAlerts(SessionManager.open(manager.getSessionFile()).getEntries()), []);
 		await resumed.fire("session_shutdown");
@@ -322,6 +459,16 @@ for (const mode of ["print", "json", "rpc"]) {
 		assert.equal(processes.length, 0);
 		await sendNotification({ ...notification, close: true });
 		assert.equal(writes[1], "\x1b]99;i=test-session:p=close;\x1b\\");
+		await sendNotification({ ...notification, title: "日本語🚨".repeat(40), body: "Long 🚨 message ".repeat(50) });
+		const bounded = [...writes.at(-1).matchAll(/\x1b\]99;([^;]+);([^\x1b]*)\x1b\\/g)];
+		assert.equal(bounded.length, 2);
+		for (const packet of bounded) {
+			let width = 140;
+			if (packet[1].includes("p=title:")) {
+				width = 60;
+			}
+			assert.ok(visibleWidth(Buffer.from(packet[2], "base64").toString("utf8")) <= width);
+		}
 		if (process.platform === "linux") {
 			Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
 			await sendNotification(notification);
