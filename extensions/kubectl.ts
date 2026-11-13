@@ -230,6 +230,12 @@ type KubectlPolicy = {
   maskSensitiveOutput?: boolean;
   deniedResources?: ResourceRule[];
   confirmationRules?: ConfirmationRule[];
+  /**
+   * Verbs that may run without confirmation in headless sessions (no UI), provided
+   * no unsafe/sensitive rule matched. Mutating and unsafe verbs always stay
+   * fail-closed headless and must run in an interactive session.
+   */
+  headlessReadOnlyVerbs?: string[];
 };
 
 type Policy = {
@@ -268,6 +274,7 @@ const DEFAULT_POLICY: Required<KubectlPolicy> = {
     { verb: "port-forward", requireUnsafe: true, message: "port-forward opens network access to a workload" },
     { verb: "debug", requireUnsafe: true, message: "debug can start privileged diagnostic containers" },
   ],
+  headlessReadOnlyVerbs: ["get", "describe", "logs", "diff", "wait"],
 };
 
 function loadPolicy(): LoadedPolicy {
@@ -284,6 +291,9 @@ function loadPolicy(): LoadedPolicy {
     }
     if (parsed.deniedResources !== undefined && !Array.isArray(parsed.deniedResources)) throw new Error("deniedResources must be an array");
     if (parsed.confirmationRules !== undefined && !Array.isArray(parsed.confirmationRules)) throw new Error("confirmationRules must be an array");
+    if (parsed.headlessReadOnlyVerbs !== undefined && (!Array.isArray(parsed.headlessReadOnlyVerbs) || parsed.headlessReadOnlyVerbs.some((verb) => typeof verb !== "string"))) {
+      throw new Error("headlessReadOnlyVerbs must be an array of strings");
+    }
 
     return {
       config: {
@@ -292,6 +302,7 @@ function loadPolicy(): LoadedPolicy {
         maskSensitiveOutput: parsed.maskSensitiveOutput ?? DEFAULT_POLICY.maskSensitiveOutput,
         deniedResources: parsed.deniedResources ?? DEFAULT_POLICY.deniedResources,
         confirmationRules: parsed.confirmationRules ?? DEFAULT_POLICY.confirmationRules,
+        headlessReadOnlyVerbs: parsed.headlessReadOnlyVerbs ?? DEFAULT_POLICY.headlessReadOnlyVerbs,
       },
     };
   } catch (error) {
@@ -741,6 +752,7 @@ function maskSensitiveOutput(raw: string): string {
 export default function (pi: ExtensionAPI) {
   const approvals = createApprovalGate(pi, {
     concurrency: "reject",
+    autoAllowHeadless: (request) => request.metadata?.headlessAutoAllow === true,
     onEvent(event) {
       const metadata = event.metadata;
       let auditLog = AUDIT_LOG;
@@ -767,6 +779,8 @@ export default function (pi: ExtensionAPI) {
         if (event.approvalScope === "once") {
           confirmation = "approved-once";
         }
+      } else if (event.type === "auto-allowed") {
+        confirmation = "auto-headless";
       }
       appendAudit(auditLog, {
         command: event.operation,
@@ -801,7 +815,7 @@ export default function (pi: ExtensionAPI) {
     label: "kubectl",
     description: [
       "Run a scoped kubectl command against a specific kubecontext.",
-      "Read commands run without confirmation.",
+      "Read commands run without confirmation. In headless sessions without UI, policy-listed read-only verbs (headlessReadOnlyVerbs) also run without confirmation; mutating, unsafe, and sensitive commands stay blocked there and need an interactive session.",
       "Mutating commands require confirmation.",
       "Unsafe commands require allowUnsafe=true and confirmation.",
       "Secret access requires allowSensitive=true and confirmation.",
@@ -944,6 +958,14 @@ export default function (pi: ExtensionAPI) {
 
       let approval;
       if (policy.requiresConfirmation) {
+        // Headless sessions (subagents, scheduled runs) have no UI to approve a prompt.
+        // Policy-listed read-only verbs still run there when no unsafe/sensitive rule
+        // matched; everything else stays fail-closed and must run in an interactive
+        // session with a user approval or grant.
+        const headlessAutoAllow = !ctx.hasUI
+          && config.headlessReadOnlyVerbs.includes(verb)
+          && !policy.requiresUnsafe
+          && !policy.requiresSensitive;
         approval = await approvals.authorize(ctx, {
           key: approvalKey(context),
           operation: displayCmd,
@@ -955,6 +977,7 @@ export default function (pi: ExtensionAPI) {
             context,
             risk: policy.risk,
             reasons: policy.reasons,
+            headlessAutoAllow,
           },
           onStatus(status) {
             let text = `Waiting for confirmation: ${displayCmd}`;

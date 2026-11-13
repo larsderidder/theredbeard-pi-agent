@@ -105,7 +105,7 @@ const TOOL_GROUPS: ToolGroup[] = [
 	},
 	{
 		name: "infrastructure",
-		aliases: ["kubernetes", "kubectl", "loki", "cluster", "pod logs", "infrastructure"],
+		aliases: ["kubernetes", "k8s", "kubectl", "loki", "cluster", "pod logs", "infrastructure"],
 		matches: (toolName) => toolName === "kubectl_exec" || toolName.startsWith("loki_query_"),
 	},
 	{
@@ -205,6 +205,44 @@ function initialActiveTools(pi: ExtensionAPI): string[] {
 	return pi.getActiveTools().filter((toolName) => groupForTool(toolName) === undefined);
 }
 
+function textOfContent(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.filter((block) => block && typeof block === "object" && (block as { type?: string }).type === "text")
+		.map((block) => String((block as { text?: unknown }).text ?? ""))
+		.join("\n");
+}
+
+// pi core answers a call to a registered-but-inactive tool with this exact error.
+const TOOL_NOT_FOUND_PATTERN = /^Error: Tool '(.+)' not found$/;
+
+function notFoundToolName(content: unknown): string | undefined {
+	return TOOL_NOT_FOUND_PATTERN.exec(textOfContent(content).trim())?.[1];
+}
+
+function toolSearchNoMatchHint(): string {
+	const domains = TOOL_GROUPS.map((group) => group.name).join(", ");
+	return [
+		"",
+		"Note: tool_search only searches deferred MCP tools and never finds lazy tools.",
+		`Lazy tools (registered but inactive, for example kubectl_exec) are activated with the ${SEARCH_TOOL_NAME} tool instead.`,
+		`Try a domain keyword: ${domains}. For example call ${SEARCH_TOOL_NAME} with query "infrastructure" or "kubectl" to load kubectl_exec.`,
+	].join("\n");
+}
+
+function appendHintToContent(content: unknown, hint: string): unknown {
+	if (typeof content === "string") return `${content}${hint}`;
+	if (!Array.isArray(content)) return [{ type: "text", text: hint }];
+	const blocks = [...content];
+	const lastText = [...blocks].reverse().find((block) => {
+		return block && typeof block === "object" && (block as { type?: string }).type === "text";
+	}) as { text?: string } | undefined;
+	if (lastText) lastText.text = `${lastText.text ?? ""}${hint}`;
+	else blocks.push({ type: "text", text: hint });
+	return blocks;
+}
+
 function activateTools(pi: ExtensionAPI, toolNames: string[]): string[] {
 	const active = pi.getActiveTools();
 	const added = toolNames.filter((toolName) => !active.includes(toolName));
@@ -217,10 +255,11 @@ export default function lazyToolsExtension(pi: ExtensionAPI): void {
 		name: SEARCH_TOOL_NAME,
 		label: "Search Tools",
 		description:
-			"Search for and activate tools that are loaded only when needed. Domains include browser automation, web research, personal history, shared documents, infrastructure, Godot, and occasional utilities.",
-		promptSnippet: "Search for additional tools when the active tools cannot perform the task",
+			"Search for and activate lazy tools: tools that are registered but stay inactive until activated here. Domains include browser automation, web research, personal history, shared documents, infrastructure, Godot, and utilities. Note: the harness tool_search tool only searches deferred MCP tool metadata and never finds these lazy tools; use this search_tools tool for them.",
+		promptSnippet: "Search for and activate lazy tools (such as kubectl_exec) when the active tools cannot perform the task",
 		promptGuidelines: [
-			"Use search_tools when a task requires browser, research, personal-history, document, infrastructure, Godot, or utility tools that are not active.",
+			"Use search_tools when a task requires browser, research, personal-history, document, infrastructure, Godot, or utility tools that are not active. Query with a domain keyword; for example \"infrastructure\" or \"kubectl\" loads kubectl_exec.",
+			"Do not use the harness tool_search tool for lazy tools such as kubectl_exec; it only covers deferred MCP tools and reports no matches for them.",
 		],
 		// ASVS 2.2.1: bound model-controlled search input and result count.
 		parameters: Type.Object({
@@ -234,8 +273,12 @@ export default function lazyToolsExtension(pi: ExtensionAPI): void {
 		async execute(_toolCallId, params) {
 			const matches = findMatchingTools(pi.getAllTools(), params.query, params.limit ?? DEFAULT_LEXICAL_LIMIT);
 			if (matches.length === 0) {
+				const domains = TOOL_GROUPS.map((group) => group.name).join(", ");
 				return {
-					content: [{ type: "text", text: `No lazy tools found for: ${params.query}` }],
+					content: [{
+						type: "text",
+						text: `No lazy tools found for: ${params.query}\n\nAvailable lazy tool domains: ${domains}. Try a domain keyword, for example "infrastructure" or "kubectl" (loads kubectl_exec).`,
+					}],
 					details: { matches: [], added: [] },
 				};
 			}
@@ -254,6 +297,40 @@ export default function lazyToolsExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_start", () => {
 		pi.setActiveTools([...new Set([...initialActiveTools(pi), SEARCH_TOOL_NAME])]);
+	});
+
+	// Self-heal direct calls to an inactive lazy tool: pi core answers those with
+	// "Error: Tool '<name>' not found" before the tool is resolved. Activate the tool so
+	// the next model call sees it, and rewrite the error in place (the event result is
+	// passed by reference) so the model knows to simply call the tool again.
+	pi.on("tool_execution_end", (event) => {
+		if (!event.isError) return;
+		const name = notFoundToolName(event.result?.content);
+		if (!name || groupForTool(name) === undefined) return;
+		if (pi.getActiveTools().includes(name)) return;
+		activateTools(pi, [name]);
+		const replacement = `Error: Tool '${name}' is a lazy tool that was not active. It has been activated automatically; call ${name} again.`;
+		const content = event.result?.content;
+		if (typeof content === "string") {
+			event.result.content = replacement;
+		} else if (Array.isArray(content)) {
+			const textBlock = content.find((block) => {
+				return block && typeof block === "object" && (block as { type?: string }).type === "text";
+			}) as { text?: string } | undefined;
+			if (textBlock) textBlock.text = replacement;
+			else content.push({ type: "text", text: replacement });
+		}
+	});
+
+	// When the harness tool_search (deferred MCP metadata only) reports no matches, point
+	// the model at search_tools, which is the router that actually finds lazy tools.
+	pi.on("tool_result", (event) => {
+		if (event.toolName !== "tool_search") return;
+		if (!textOfContent(event.content).includes("No matching tools found.")) return;
+		const active = new Set(pi.getActiveTools());
+		const hasInactiveLazy = pi.getAllTools().some((tool) => groupForTool(tool.name) !== undefined && !active.has(tool.name));
+		if (!hasInactiveLazy) return;
+		return { content: appendHintToContent(event.content, toolSearchNoMatchHint()) as typeof event.content };
 	});
 
 	pi.registerCommand("lazy-tools", {
@@ -288,4 +365,7 @@ export default function lazyToolsExtension(pi: ExtensionAPI): void {
 export const lazyToolsTestApi = {
 	findMatchingTools,
 	groupForTool,
+	notFoundToolName,
+	toolSearchNoMatchHint,
+	appendHintToContent,
 };

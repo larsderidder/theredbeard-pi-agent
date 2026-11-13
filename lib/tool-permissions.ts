@@ -14,7 +14,7 @@ export interface ApprovalLifecycle {
 
 export type ApprovalScope = "turn" | "time" | "session";
 export type ApprovalConcurrency = "queue" | "reject";
-export type ApprovalConfirmation = "approved-once" | "approved-with-grant" | "approval-grant";
+export type ApprovalConfirmation = "approved-once" | "approved-with-grant" | "approval-grant" | "auto-headless";
 export type ApprovalDenialKind = "busy" | "no-ui" | "user-denied";
 
 export interface ApprovalGrant {
@@ -36,7 +36,7 @@ export interface ApprovalRequest {
 }
 
 export interface ApprovalEvent {
-	type: "prompted" | "approved" | "grant-used" | "denied" | "blocked";
+	type: "prompted" | "approved" | "grant-used" | "denied" | "blocked" | "auto-allowed";
 	key: string;
 	operation: string;
 	metadata?: Record<string, unknown>;
@@ -50,6 +50,14 @@ export interface ApprovalGateOptions {
 	durationMs?: number;
 	now?: () => number;
 	onEvent?: (event: ApprovalEvent) => void | Promise<void>;
+	/**
+	 * Decide whether a request may run without interactive confirmation in a headless
+	 * session (no UI). Returning true allows the request with confirmation
+	 * "auto-headless" and emits an "auto-allowed" event; returning false keeps the
+	 * fail-closed "no-ui" denial. Callers must keep this conservative: only genuinely
+	 * non-mutating operations should be auto-allowed.
+	 */
+	autoAllowHeadless?: (request: ApprovalRequest) => boolean;
 }
 
 export interface ApprovalAllowed {
@@ -270,6 +278,19 @@ export function createApprovalGate(pi: ApprovalLifecycle, options: ApprovalGateO
 		}
 
 		if (!ctx.hasUI) {
+			if (options.autoAllowHeadless?.(request)) {
+				await emit({
+					type: "auto-allowed",
+					key: request.key,
+					operation: request.operation,
+					metadata: request.metadata,
+				});
+				return {
+					allowed: true,
+					confirmation: "auto-headless",
+					release: lease.release,
+				};
+			}
 			lease.release();
 			const reason = "confirmation required but no UI is available";
 			await emit({

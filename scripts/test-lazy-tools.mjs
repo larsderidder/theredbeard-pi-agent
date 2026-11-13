@@ -109,4 +109,57 @@ const genericResult = await searchTools.execute("test", {
 assert.deepEqual(genericResult.details, { matches: [], added: [] });
 assert.deepEqual(activeTools.sort(), ["browser_click", "browser_navigate", "read", "search_tools", "todo"]);
 
+// notFoundToolName parses pi core's "tool not found" error (array and string content).
+assert.equal(
+	lazyToolsTestApi.notFoundToolName([{ type: "text", text: "Error: Tool 'kubectl_exec' not found" }]),
+	"kubectl_exec",
+);
+assert.equal(lazyToolsTestApi.notFoundToolName("Error: Tool 'nope' not found"), "nope");
+assert.equal(lazyToolsTestApi.notFoundToolName([{ type: "text", text: "some other error" }]), undefined);
+assert.equal(lazyToolsTestApi.notFoundToolName([]), undefined);
+
+// A direct call to an inactive lazy tool is auto-activated and the error is rewritten
+// in place so the model retries the same call.
+activeTools = ["read", "todo", "search_tools"];
+const endHandler = handlers.get("tool_execution_end");
+assert.ok(endHandler);
+const endEvent = {
+	isError: true,
+	toolName: "kubectl_exec",
+	result: { content: [{ type: "text", text: "Error: Tool 'kubectl_exec' not found" }] },
+};
+endHandler(endEvent, {});
+assert.ok(activeTools.includes("kubectl_exec"));
+assert.match(endEvent.result.content[0].text, /activated automatically; call kubectl_exec again/);
+
+// Unknown tools that are not lazy stay untouched; non-error events are ignored.
+const unknownEvent = {
+	isError: true,
+	toolName: "totally_unknown",
+	result: { content: [{ type: "text", text: "Error: Tool 'totally_unknown' not found" }] },
+};
+endHandler(unknownEvent, {});
+assert.equal(activeTools.includes("totally_unknown"), false);
+assert.equal(unknownEvent.result.content[0].text, "Error: Tool 'totally_unknown' not found");
+endHandler({ isError: false, toolName: "read", result: { content: [] } }, {});
+
+// A "No matching tools found." result from the harness tool_search gets a search_tools hint.
+const resultHandler = handlers.get("tool_result");
+assert.ok(resultHandler);
+const searchEvent = { toolName: "tool_search", content: [{ type: "text", text: "No matching tools found." }], isError: false };
+const hookResult = resultHandler(searchEvent, {});
+assert.ok(hookResult?.content);
+const hintText = hookResult.content.map((block) => block.text ?? "").join("\n");
+assert.match(hintText, /search_tools/);
+assert.match(hintText, /kubectl_exec/);
+assert.match(hintText, /No matching tools found\./);
+// Other tools and other results are left alone.
+assert.equal(resultHandler({ toolName: "bash", content: [{ type: "text", text: "No matching tools found." }] }, {}), undefined);
+assert.equal(resultHandler({ toolName: "tool_search", content: [{ type: "text", text: "Loaded 1 tool..." }] }, {}), undefined);
+
+// appendHintToContent handles string content and content without a text block.
+assert.match(String(lazyToolsTestApi.appendHintToContent("No matching tools found.", "\nHINT")), /HINT$/);
+const appended = lazyToolsTestApi.appendHintToContent([{ type: "image", data: "x" }], "\nHINT");
+assert.deepEqual(appended.at(-1), { type: "text", text: "\nHINT" });
+
 console.log("lazy tool tests passed");

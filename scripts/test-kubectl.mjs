@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
 import { mock } from "node:test";
@@ -136,6 +136,48 @@ try {
 	]) {
 		assert.equal((await handler({ toolName: "bash", input: { command } })).block, true, command);
 	}
+
+	// Headless (no UI): policy-listed read-only verbs auto-run even when a custom
+	// confirmationRule would otherwise prompt; mutating/unsafe/sensitive stay blocked.
+	mkdirSync(join(root, ".pi", "agent"), { recursive: true });
+	writeFileSync(
+		join(root, ".pi", "agent", "kubectl-policy.json"),
+		JSON.stringify({
+			auditLog: join(root, "audit.log"),
+			confirmationRules: [
+				...["delete", "patch", "replace"].map((verb) => ({ verb, message: `${verb} mutates resources` })),
+				{ verb: "logs", message: "custom rule would force a prompt" },
+			],
+		}),
+	);
+	const headlessRead = runtime();
+	headlessRead.ctx.hasUI = false;
+	const logsResult = await run(headlessRead, ["logs", "deployment/api", "-n", "sbl"]);
+	assert.equal(logsResult.isError, false);
+	assert.equal(headlessRead.calls.length, 1);
+	assert.equal(headlessRead.prompts(), 0);
+
+	const headlessApply = runtime();
+	headlessApply.ctx.hasUI = false;
+	assert.equal((await run(headlessApply, ["apply", "-f", "/tmp/x.yaml"])).details.blocked, true);
+	assert.equal(headlessApply.calls.length, 0);
+
+	const headlessSecret = runtime();
+	headlessSecret.ctx.hasUI = false;
+	assert.equal((await run(headlessSecret, ["get", "secrets", "-n", "metabase"])).details.blocked, true);
+	assert.equal(headlessSecret.calls.length, 0);
+
+	const headlessWatch = runtime();
+	headlessWatch.ctx.hasUI = false;
+	assert.equal((await run(headlessWatch, ["get", "pods", "--watch"])).details.blocked, true);
+	assert.equal(headlessWatch.calls.length, 0);
+
+	// With UI, the same custom-rule logs command still prompts.
+	const uiLogs = runtime(["Allow once"]);
+	const uiLogsResult = await run(uiLogs, ["logs", "deployment/api", "-n", "sbl"]);
+	assert.equal(uiLogsResult.isError, false);
+	assert.equal(uiLogs.prompts(), 1);
+
 	console.log("kubectl tests passed");
 } finally {
 	mock.restoreAll();

@@ -262,4 +262,40 @@ for (const event of ["session_start", "session_shutdown"]) {
 	result.release();
 }
 
+// autoAllowHeadless: headless sessions can run requests the caller explicitly marks
+// as auto-allowable; everything else still fails closed with "no-ui".
+{
+	const pi = createPi();
+	const events = [];
+	const gate = createApprovalGate(pi, {
+		autoAllowHeadless: (req) => req.metadata?.headlessAutoAllow === true,
+		onEvent(event) {
+			events.push(event);
+		},
+	});
+	const headlessCtx = { hasUI: false, ui: {} };
+
+	const autoAllowed = await gate.authorize(headlessCtx, { ...request, metadata: { headlessAutoAllow: true } });
+	assert.equal(autoAllowed.allowed, true);
+	assert.equal(autoAllowed.confirmation, "auto-headless");
+	autoAllowed.release();
+
+	const stillDenied = await gate.authorize(headlessCtx, request);
+	assert.deepEqual(stillDenied, {
+		allowed: false,
+		kind: "no-ui",
+		reason: "confirmation required but no UI is available",
+	});
+
+	// With UI present, the predicate is not consulted and the normal prompt flow runs.
+	const ctx = createContext(["Allow once"]);
+	const uiResult = await gate.authorize(ctx.context, { ...request, metadata: { headlessAutoAllow: true } });
+	assert.equal(uiResult.allowed, true);
+	assert.equal(uiResult.confirmation, "approved-once");
+	assert.equal(ctx.selectCalls(), 1);
+	uiResult.release();
+
+	assert.deepEqual(events.map((event) => event.type), ["auto-allowed", "blocked", "prompted", "approved"]);
+}
+
 console.log("tool permission tests passed");
